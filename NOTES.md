@@ -62,3 +62,18 @@ create policy "Users manage own assignments"
 
 The `user_id` column is populated from `supabase.auth.getUser().data.user.id`
 in Phase 9 — the app never stores it locally.
+
+---
+
+## Phase 11 — Reminder IDs (optional DB migration)
+
+Notification IDs (`reminderIds`) are stored locally in AsyncStorage only.
+To persist them to Supabase so they survive a fresh login, run this in the SQL Editor:
+
+```sql
+alter table public.assignments
+  add column if not exists reminder_ids text[] default '{}';
+```
+
+Without this, reminders still fire on the device but cannot be
+programmatically canceled after a fresh login or on a second device.

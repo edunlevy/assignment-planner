@@ -3,6 +3,7 @@ import { addWeeks, differenceInCalendarDays, format, isAfter, parseISO } from 'd
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
 import { dbDelete, dbFetch, dbInsert, dbInsertMany, dbUpdate } from './lib/assignmentsDb';
+import { cancelReminders, requestNotificationPermission, scheduleReminders } from './lib/notifications';
 import { supabase } from './lib/supabase';
 import AuthScreen from './screens/AuthScreen';
 import {
@@ -199,6 +200,7 @@ function sanitizeAssignment(a) {
       ? a.importance
       : 3,
     status: VALID_STATUSES.has(a.status) ? a.status : 'not_started',
+    reminderIds: Array.isArray(a.reminderIds) ? a.reminderIds : [],
   };
 }
 
@@ -234,6 +236,11 @@ function AppScreen() {
     });
     return () => subscription.unsubscribe();
   }, []);
+
+  // Request notification permission once when the user is logged in
+  useEffect(() => {
+    if (session) requestNotificationPermission();
+  }, [!!session]);
 
   // Load assignments: Supabase (source of truth) with AsyncStorage as offline fallback
   useEffect(() => {
@@ -331,6 +338,10 @@ function AppScreen() {
     setSyncError('');
     try {
       if (editingId) {
+        // Cancel existing reminders before saving updated data
+        const existing = assignments.find(a => a.id === editingId);
+        await cancelReminders(existing?.reminderIds);
+
         const updated = await dbUpdate(editingId, session.user.id, {
           title: form.title.trim(),
           course: form.course.trim(),
@@ -338,8 +349,15 @@ function AppScreen() {
           importance: form.importance,
           status: form.status,
         });
+
+        // Only schedule new reminders if not completed
+        const reminderIds = form.status !== 'completed'
+          ? await scheduleReminders(updated)
+          : [];
+
+        const finalAssignment = { ...updated, reminderIds };
         setAssignments(prev => {
-          const next = prev.map(a => a.id === editingId ? updated : a);
+          const next = prev.map(a => a.id === editingId ? finalAssignment : a);
           AsyncStorage.setItem(storageKey(session.user.id), JSON.stringify(next)).catch(() => {});
           return next;
         });
@@ -362,8 +380,12 @@ function AppScreen() {
           week++;
         }
         const saved = await dbInsertMany(drafts, session.user.id);
+        // Schedule reminders for each occurrence
+        const savedWithReminders = await Promise.all(
+          saved.map(async a => ({ ...a, reminderIds: await scheduleReminders(a) }))
+        );
         setAssignments(prev => {
-          const next = [...saved, ...prev];
+          const next = [...savedWithReminders, ...prev];
           AsyncStorage.setItem(storageKey(session.user.id), JSON.stringify(next)).catch(() => {});
           return next;
         });
@@ -375,8 +397,10 @@ function AppScreen() {
           importance: form.importance,
           status: 'not_started',
         }, session.user.id);
+        const reminderIds = await scheduleReminders(saved);
+        const savedWithReminders = { ...saved, reminderIds };
         setAssignments(prev => {
-          const next = [saved, ...prev];
+          const next = [savedWithReminders, ...prev];
           AsyncStorage.setItem(storageKey(session.user.id), JSON.stringify(next)).catch(() => {});
           return next;
         });
@@ -394,7 +418,9 @@ function AppScreen() {
       setSaving(true);
       setSyncError('');
       try {
+        const deletingAssignment = assignments.find(a => a.id === editingId);
         await dbDelete(editingId, session.user.id);
+        await cancelReminders(deletingAssignment?.reminderIds);
         setAssignments(prev => {
           const next = prev.filter(a => a.id !== editingId);
           AsyncStorage.setItem(storageKey(session.user.id), JSON.stringify(next)).catch(() => {});
