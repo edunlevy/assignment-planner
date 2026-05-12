@@ -200,7 +200,9 @@ function sanitizeAssignment(a) {
   };
 }
 
-const STORAGE_KEY = 'assignments';
+function storageKey(userId) {
+  return `assignments_${userId}`;
+}
 
 function AppScreen() {
   const insets = useSafeAreaInsets();
@@ -208,6 +210,10 @@ function AppScreen() {
   const [sessionLoaded, setSessionLoaded] = useState(false);
   const [assignments, setAssignments] = useState([]);
   const [loaded, setLoaded] = useState(false);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [fieldErrors, setFieldErrors] = useState({ title: '', course: '', dueDate: '', repeatUntil: '' });
 
   // Check for existing session and listen for auth changes
   useEffect(() => {
@@ -217,18 +223,22 @@ function AppScreen() {
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
       setSession(s);
+      // Clear in-memory assignments when user signs out so next user starts clean
+      if (!s) {
+        setAssignments([]);
+        setLoaded(false);
+      }
     });
     return () => subscription.unsubscribe();
   }, []);
-  const [modalVisible, setModalVisible] = useState(false);
-  const [editingId, setEditingId] = useState(null);
-  const [form, setForm] = useState(EMPTY_FORM);
-  const [fieldErrors, setFieldErrors] = useState({ title: '', course: '', dueDate: '', repeatUntil: '' });
 
+  // Load assignments scoped to the logged-in user
   useEffect(() => {
+    if (!session) return;
+    setLoaded(false);
     (async () => {
       try {
-        const json = await AsyncStorage.getItem(STORAGE_KEY);
+        const json = await AsyncStorage.getItem(storageKey(session.user.id));
         if (json) {
           const parsed = JSON.parse(json);
           if (Array.isArray(parsed)) {
@@ -246,14 +256,15 @@ function AppScreen() {
         setLoaded(true);
       }
     })();
-  }, []);
+  }, [session?.user?.id]); // re-run only when the user ID changes
 
+  // Persist scoped to the logged-in user
   useEffect(() => {
-    if (!loaded) return;
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(assignments)).catch(e =>
+    if (!loaded || !session) return;
+    AsyncStorage.setItem(storageKey(session.user.id), JSON.stringify(assignments)).catch(e =>
       console.warn('Failed to save assignments:', e)
     );
-  }, [assignments, loaded]);
+  }, [assignments, loaded, session?.user?.id]);
 
   const EMPTY_ERRORS = { title: '', course: '', dueDate: '', repeatUntil: '' };
 

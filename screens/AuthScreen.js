@@ -55,8 +55,11 @@ export default function AuthScreen() {
         if (err) {
           setError(err.message);
         } else {
+          // Switch to login tab but keep the confirmation message visible
+          setEmail('');
+          setPassword('');
+          setMode('login');
           setInfo('Account created! Check your email to confirm, then log in.');
-          switchMode('login');
         }
       }
     } finally {
