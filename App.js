@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
 import {
+  Alert,
   FlatList,
   Modal,
   Pressable,
@@ -59,6 +60,14 @@ const STATUS_COLORS = {
   completed: '#6BCB77',
 };
 
+const IMPORTANCE_HINTS = {
+  1: 'Low priority',
+  2: 'Minor',
+  3: 'Normal',
+  4: 'Important',
+  5: 'Critical — do this first!',
+};
+
 function ImportanceDots({ value }) {
   return (
     <View style={styles.dotsRow}>
@@ -72,10 +81,13 @@ function ImportanceDots({ value }) {
   );
 }
 
-function AssignmentRow({ item }) {
+function AssignmentRow({ item, onPress }) {
   const isCompleted = item.status === 'completed';
   return (
-    <View style={[styles.card, isCompleted && styles.cardCompleted]}>
+    <Pressable
+      style={[styles.card, isCompleted && styles.cardCompleted]}
+      onPress={onPress}
+    >
       <View style={styles.cardBody}>
         <Text style={[styles.cardTitle, isCompleted && styles.cardTitleCompleted]}>
           {item.title}
@@ -87,11 +99,11 @@ function AssignmentRow({ item }) {
       <View style={[styles.badge, { backgroundColor: STATUS_COLORS[item.status] }]}>
         <Text style={styles.badgeText}>{STATUS_LABELS[item.status]}</Text>
       </View>
-    </View>
+    </Pressable>
   );
 }
 
-const EMPTY_FORM = { title: '', course: '', dueDate: '', importance: 3 };
+const EMPTY_FORM = { title: '', course: '', dueDate: '', importance: 3, status: 'not_started' };
 
 function isValidDate(str) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(str)) return false;
@@ -107,6 +119,7 @@ export default function App() {
   const [assignments, setAssignments] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
+  const [editingId, setEditingId] = useState(null); // null = add mode, id string = edit mode
   const [form, setForm] = useState(EMPTY_FORM);
   const [dueDateError, setDueDateError] = useState('');
 
@@ -137,35 +150,100 @@ export default function App() {
     );
   }, [assignments, loaded]);
 
-  function handleAdd() {
-    if (!form.title.trim() || !form.course.trim() || !form.dueDate.trim()) return;
-    if (!isValidDate(form.dueDate.trim())) {
-      setDueDateError('Enter a valid date in YYYY-MM-DD format (e.g. 2026-06-01)');
-      return;
-    }
-    const newAssignment = {
-      id: Date.now().toString(),
-      title: form.title.trim(),
-      course: form.course.trim(),
-      dueDate: form.dueDate.trim(),
-      importance: form.importance,
-      status: 'not_started',
-    };
-    setAssignments(prev => [newAssignment, ...prev]);
+  function openAddModal() {
+    setEditingId(null);
     setForm(EMPTY_FORM);
     setDueDateError('');
-    setModalVisible(false);
+    setModalVisible(true);
+  }
+
+  function openEditModal(item) {
+    setEditingId(item.id);
+    setForm({
+      title: item.title,
+      course: item.course,
+      dueDate: item.dueDate,
+      importance: item.importance,
+      status: item.status,
+    });
+    setDueDateError('');
+    setModalVisible(true);
   }
 
   function handleClose() {
     setForm(EMPTY_FORM);
     setDueDateError('');
+    setEditingId(null);
     setModalVisible(false);
   }
 
+  function handleSave() {
+    if (!form.title.trim() || !form.course.trim() || !form.dueDate.trim()) return;
+    if (!isValidDate(form.dueDate.trim())) {
+      setDueDateError('Enter a valid date in YYYY-MM-DD format (e.g. 2026-06-01)');
+      return;
+    }
+
+    if (editingId) {
+      // Update existing assignment
+      setAssignments(prev =>
+        prev.map(a =>
+          a.id === editingId
+            ? {
+                ...a,
+                title: form.title.trim(),
+                course: form.course.trim(),
+                dueDate: form.dueDate.trim(),
+                importance: form.importance,
+                status: form.status,
+              }
+            : a
+        )
+      );
+    } else {
+      // Add new assignment
+      setAssignments(prev => [
+        {
+          id: Date.now().toString(),
+          title: form.title.trim(),
+          course: form.course.trim(),
+          dueDate: form.dueDate.trim(),
+          importance: form.importance,
+          status: 'not_started',
+        },
+        ...prev,
+      ]);
+    }
+
+    handleClose();
+  }
+
+  function handleDelete() {
+    Alert.alert(
+      'Delete Assignment',
+      `Delete "${form.title}"?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            setAssignments(prev => prev.filter(a => a.id !== editingId));
+            handleClose();
+          },
+        },
+      ]
+    );
+  }
+
+  // Smart sort: incomplete sorted by due date asc, then importance desc; completed at bottom
   const incomplete = assignments.filter(a => a.status !== 'completed');
   const completed = assignments.filter(a => a.status === 'completed');
-  const sorted = [...incomplete, ...completed];
+  const sortedIncomplete = [...incomplete].sort((a, b) => {
+    if (a.dueDate !== b.dueDate) return a.dueDate.localeCompare(b.dueDate);
+    return b.importance - a.importance;
+  });
+  const sorted = [...sortedIncomplete, ...completed];
 
   if (!loaded) {
     return (
@@ -174,6 +252,8 @@ export default function App() {
       </View>
     );
   }
+
+  const isEditing = editingId !== null;
 
   return (
     <View style={styles.container}>
@@ -189,7 +269,9 @@ export default function App() {
       <FlatList
         data={sorted}
         keyExtractor={item => item.id}
-        renderItem={({ item }) => <AssignmentRow item={item} />}
+        renderItem={({ item }) => (
+          <AssignmentRow item={item} onPress={() => openEditModal(item)} />
+        )}
         contentContainerStyle={styles.list}
         ListEmptyComponent={
           <Text style={styles.empty}>No assignments yet — tap + to add one.</Text>
@@ -197,11 +279,11 @@ export default function App() {
       />
 
       {/* Add button */}
-      <Pressable style={styles.fab} onPress={() => setModalVisible(true)}>
+      <Pressable style={styles.fab} onPress={openAddModal}>
         <Text style={styles.fabText}>+</Text>
       </Pressable>
 
-      {/* Add assignment modal */}
+      {/* Add / Edit modal */}
       <Modal
         visible={modalVisible}
         animationType="slide"
@@ -211,7 +293,9 @@ export default function App() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalSheet}>
             <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-              <Text style={styles.modalTitle}>New Assignment</Text>
+              <Text style={styles.modalTitle}>
+                {isEditing ? 'Edit Assignment' : 'New Assignment'}
+              </Text>
 
               <Text style={styles.label}>Title</Text>
               <TextInput
@@ -265,17 +349,51 @@ export default function App() {
                   </Pressable>
                 ))}
               </View>
-              <Text style={styles.importanceHint}>
-                {form.importance === 1 && 'Low priority'}
-                {form.importance === 2 && 'Minor'}
-                {form.importance === 3 && 'Normal'}
-                {form.importance === 4 && 'Important'}
-                {form.importance === 5 && 'Critical — do this first!'}
-              </Text>
+              <Text style={styles.importanceHint}>{IMPORTANCE_HINTS[form.importance]}</Text>
 
-              <Pressable style={styles.saveButton} onPress={handleAdd}>
-                <Text style={styles.saveButtonText}>Save Assignment</Text>
+              {/* Status picker — only shown when editing */}
+              {isEditing && (
+                <>
+                  <Text style={styles.label}>Status</Text>
+                  <View style={styles.statusRow}>
+                    {Object.entries(STATUS_LABELS).map(([key, label]) => (
+                      <Pressable
+                        key={key}
+                        style={[
+                          styles.statusButton,
+                          form.status === key && {
+                            backgroundColor: STATUS_COLORS[key],
+                            borderColor: STATUS_COLORS[key],
+                          },
+                        ]}
+                        onPress={() => setForm(f => ({ ...f, status: key }))}
+                      >
+                        <Text
+                          style={[
+                            styles.statusButtonText,
+                            form.status === key && styles.statusButtonTextSelected,
+                          ]}
+                        >
+                          {label}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </>
+              )}
+
+              <Pressable style={styles.saveButton} onPress={handleSave}>
+                <Text style={styles.saveButtonText}>
+                  {isEditing ? 'Save Changes' : 'Save Assignment'}
+                </Text>
               </Pressable>
+
+              {isEditing && (
+                <Pressable style={styles.deleteButton} onPress={handleDelete}>
+                  <Text style={styles.deleteButtonText}>Delete Assignment</Text>
+                </Pressable>
+              )}
+
               <Pressable style={styles.cancelButton} onPress={handleClose}>
                 <Text style={styles.cancelButtonText}>Cancel</Text>
               </Pressable>
@@ -474,7 +592,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
 
-  // Importance picker (in form)
+  // Importance picker
   importanceRow: {
     flexDirection: 'row',
     gap: 10,
@@ -508,6 +626,31 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
 
+  // Status picker
+  statusRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 4,
+    flexWrap: 'wrap',
+  },
+  statusButton: {
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: '#DDE2FF',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    backgroundColor: '#F8F9FF',
+  },
+  statusButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#555',
+  },
+  statusButtonTextSelected: {
+    color: '#FFFFFF',
+  },
+
+  // Action buttons
   saveButton: {
     backgroundColor: '#3B5BDB',
     borderRadius: 12,
@@ -519,6 +662,19 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '700',
     fontSize: 16,
+  },
+  deleteButton: {
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#FF6B6B',
+    padding: 14,
+    alignItems: 'center',
+    marginTop: 10,
+  },
+  deleteButtonText: {
+    color: '#FF6B6B',
+    fontWeight: '700',
+    fontSize: 15,
   },
   cancelButton: {
     alignItems: 'center',
