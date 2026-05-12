@@ -1,0 +1,113 @@
+import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { supabase } from '../lib/supabase';
+
+export default function ProfileModal({ visible, onClose, email }) {
+  const insets = useSafeAreaInsets();
+
+  async function handleSignOut() {
+    await supabase.auth.signOut();
+    onClose();
+  }
+
+  return (
+    <Modal
+      visible={visible}
+      animationType="slide"
+      transparent
+      onRequestClose={onClose}
+    >
+      <View style={styles.overlay}>
+        <View style={[styles.sheet, { paddingBottom: insets.bottom + 24 }]}>
+
+          <View style={styles.handle} />
+
+          <Text style={styles.title}>Profile</Text>
+
+          <View style={styles.emailRow}>
+            <Text style={styles.emailLabel}>Signed in as</Text>
+            <Text style={styles.emailValue} numberOfLines={1}>{email}</Text>
+          </View>
+
+          <Pressable style={styles.signOutButton} onPress={handleSignOut}>
+            <Text style={styles.signOutText}>Sign Out</Text>
+          </Pressable>
+
+          <Pressable style={styles.closeButton} onPress={onClose}>
+            <Text style={styles.closeText}>Close</Text>
+          </Pressable>
+
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const styles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'flex-end',
+  },
+  sheet: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 24,
+  },
+  handle: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#DDE2FF',
+    alignSelf: 'center',
+    marginBottom: 20,
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1A1A2E',
+    marginBottom: 24,
+  },
+  emailRow: {
+    backgroundColor: '#F0F4FF',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 24,
+  },
+  emailLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#888',
+    marginBottom: 4,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  emailValue: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#1A1A2E',
+  },
+  signOutButton: {
+    backgroundColor: '#FEF2F2',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    padding: 16,
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  signOutText: {
+    color: '#DC2626',
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  closeButton: {
+    alignItems: 'center',
+    padding: 8,
+  },
+  closeText: {
+    color: '#888',
+    fontSize: 15,
+  },
+});

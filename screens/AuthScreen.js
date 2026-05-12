@@ -33,6 +33,22 @@ export default function AuthScreen() {
     clearMessages();
   }
 
+  async function handleForgotPassword() {
+    clearMessages();
+    if (!email.trim()) { setError('Enter your email address above first'); return; }
+    setLoading(true);
+    try {
+      const { error: err } = await supabase.auth.resetPasswordForEmail(email.trim());
+      if (err) {
+        setError(err.message);
+      } else {
+        setInfo('Password reset email sent! Check your inbox.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function handleSubmit() {
     clearMessages();
     if (!email.trim()) { setError('Email is required'); return; }
@@ -115,6 +131,13 @@ export default function AuthScreen() {
           onChangeText={t => { setPassword(t); clearMessages(); }}
           secureTextEntry
         />
+
+        {/* Forgot password — login mode only */}
+        {mode === 'login' && (
+          <Pressable onPress={handleForgotPassword} disabled={loading} style={styles.forgotButton}>
+            <Text style={styles.forgotText}>Forgot password?</Text>
+          </Pressable>
+        )}
 
         {/* Feedback */}
         {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -208,6 +231,15 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#1A1A2E',
     backgroundColor: '#F8F9FF',
+  },
+  forgotButton: {
+    alignSelf: 'flex-end',
+    marginTop: 8,
+  },
+  forgotText: {
+    color: '#3B5BDB',
+    fontSize: 13,
+    fontWeight: '500',
   },
   error: {
     color: '#EF4444',

@@ -6,6 +6,7 @@ import { dbDelete, dbFetch, dbInsert, dbInsertMany, dbUpdate } from './lib/assig
 import { cancelReminders, loadReminderMap, mergeReminderIds, requestNotificationPermission, saveReminderMap, scheduleReminders } from './lib/notifications';
 import { supabase } from './lib/supabase';
 import AuthScreen from './screens/AuthScreen';
+import ProfileModal from './screens/ProfileModal';
 import {
   ActivityIndicator,
   Alert,
@@ -182,6 +183,7 @@ function AppScreen() {
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [syncError, setSyncError] = useState('');
+  const [profileVisible, setProfileVisible] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -487,10 +489,10 @@ function AppScreen() {
             <Text style={styles.headerSub}>{incomplete.length} remaining</Text>
           </View>
           <Pressable
-            style={styles.signOutButton}
-            onPress={() => supabase.auth.signOut()}
+            style={styles.profileButton}
+            onPress={() => setProfileVisible(true)}
           >
-            <Text style={styles.signOutText}>Sign out</Text>
+            <Text style={styles.profileButtonText}>Account</Text>
           </Pressable>
         </View>
       </View>
@@ -681,6 +683,12 @@ function AppScreen() {
           </View>
         </View>
       </Modal>
+
+      <ProfileModal
+        visible={profileVisible}
+        onClose={() => setProfileVisible(false)}
+        email={session?.user?.email ?? ''}
+      />
     </View>
   );
 }
@@ -719,14 +727,14 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  signOutButton: {
+  profileButton: {
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.4)',
   },
-  signOutText: {
+  profileButtonText: {
     color: '#BFC8FF',
     fontSize: 13,
     fontWeight: '600',
