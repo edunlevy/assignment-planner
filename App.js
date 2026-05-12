@@ -21,40 +21,6 @@ import {
 } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-const SAMPLE_ASSIGNMENTS = [
-  {
-    id: '1',
-    title: 'Problem Set 3',
-    course: 'MATH 201',
-    dueDate: '2026-05-14',
-    importance: 4,
-    status: 'not_started',
-  },
-  {
-    id: '2',
-    title: 'Lab Report — Titration',
-    course: 'CHEM 110',
-    dueDate: '2026-05-15',
-    importance: 5,
-    status: 'in_progress',
-  },
-  {
-    id: '3',
-    title: 'Essay Draft',
-    course: 'ENG 102',
-    dueDate: '2026-05-18',
-    importance: 3,
-    status: 'not_started',
-  },
-  {
-    id: '4',
-    title: 'Reading Response',
-    course: 'HIST 220',
-    dueDate: '2026-05-12',
-    importance: 2,
-    status: 'completed',
-  },
-];
 
 const STATUS_LABELS = {
   not_started: 'Not Started',
