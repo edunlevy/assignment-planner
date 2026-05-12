@@ -243,8 +243,9 @@ function AppScreen() {
     setLoaded(false);
     setSyncError('');
     (async () => {
+      // Show cached data immediately while Supabase loads.
+      // Isolated try so a corrupt cache never blocks the network fetch.
       try {
-        // Show cached data immediately while Supabase loads
         const cached = await AsyncStorage.getItem(storageKey(userId));
         if (!cancelled && cached) {
           const parsed = JSON.parse(cached);
@@ -252,15 +253,19 @@ function AppScreen() {
             setAssignments(parsed.map(sanitizeAssignment).filter(Boolean));
           }
         }
-        // Replace with fresh Supabase data
-        const fresh = await dbFetch();
+      } catch {
+        // Cache unreadable — proceed to Supabase fetch regardless
+      }
+
+      // Always attempt to fetch fresh data from Supabase
+      try {
+        const fresh = await dbFetch(userId);
         if (!cancelled) {
           setAssignments(fresh);
           AsyncStorage.setItem(storageKey(userId), JSON.stringify(fresh)).catch(() => {});
         }
-      } catch (e) {
+      } catch {
         if (!cancelled) {
-          // Supabase unavailable — keep showing the cached data
           setSyncError('Could not reach the server. Showing cached data.');
         }
       } finally {
@@ -326,7 +331,7 @@ function AppScreen() {
     setSyncError('');
     try {
       if (editingId) {
-        const updated = await dbUpdate(editingId, {
+        const updated = await dbUpdate(editingId, session.user.id, {
           title: form.title.trim(),
           course: form.course.trim(),
           dueDate: form.dueDate.trim(),
@@ -389,7 +394,7 @@ function AppScreen() {
       setSaving(true);
       setSyncError('');
       try {
-        await dbDelete(editingId);
+        await dbDelete(editingId, session.user.id);
         setAssignments(prev => {
           const next = prev.filter(a => a.id !== editingId);
           AsyncStorage.setItem(storageKey(session.user.id), JSON.stringify(next)).catch(() => {});
