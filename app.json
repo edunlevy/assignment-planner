@@ -14,13 +14,15 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.elliedunlevy.assignmentplanner"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#3B5BDB"
       },
+      "package": "com.elliedunlevy.assignmentplanner",
       "edgeToEdgeEnabled": true
     },
     "web": {
