@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "assignment-planner",
+    "name": "Assignment Planner",
     "slug": "assignment-planner",
     "version": "1.0.0",
     "scheme": "assignmentplanner",
@@ -15,7 +15,8 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.elliedunlevy.assignmentplanner"
+      "bundleIdentifier": "com.elliedunlevy.assignmentplanner",
+      "buildNumber": "1"
     },
     "android": {
       "adaptiveIcon": {
