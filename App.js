@@ -198,11 +198,8 @@ function AppScreen() {
       setSession(s);
       setSessionLoaded(true);
     });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
       setSession(s);
-      if (event === 'PASSWORD_RECOVERY') {
-        setRecoveryMode(true);
-      }
       if (!s) {
         setAssignments([]);
         setLoaded(false);
@@ -213,22 +210,22 @@ function AppScreen() {
   }, []);
 
   // Handle password-reset deep links (assignmentplanner://reset-password#access_token=...&type=recovery)
-  // With detectSessionInUrl:false we must parse the URL ourselves and call setSession to
-  // give Supabase the recovery tokens, which then fires onAuthStateChange(PASSWORD_RECOVERY).
+  // With detectSessionInUrl:false we parse the URL ourselves. setSession emits SIGNED_IN (not
+  // PASSWORD_RECOVERY), so we set recoveryMode directly on success instead of waiting for the event.
   useEffect(() => {
-    function handleDeepLink(url) {
+    async function handleDeepLink(url) {
       if (!url) return;
-      // Supabase puts tokens after the # fragment
       const fragment = url.includes('#') ? url.split('#')[1] : '';
       if (!fragment) return;
       const params = Object.fromEntries(
         fragment.split('&').map(pair => pair.split('=').map(decodeURIComponent))
       );
       if (params.type === 'recovery' && params.access_token) {
-        supabase.auth.setSession({
+        const { error } = await supabase.auth.setSession({
           access_token: params.access_token,
           refresh_token: params.refresh_token ?? '',
-        }).catch(() => {});
+        });
+        if (!error) setRecoveryMode(true);
       }
     }
 
