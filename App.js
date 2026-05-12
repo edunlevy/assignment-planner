@@ -202,7 +202,7 @@ function AppScreen() {
   const [modalVisible, setModalVisible] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
-  const [dueDateError, setDueDateError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState({ title: '', course: '', dueDate: '' });
 
   useEffect(() => {
     (async () => {
@@ -214,13 +214,13 @@ function AppScreen() {
             const clean = parsed.map(sanitizeAssignment).filter(Boolean);
             setAssignments(clean);
           } else {
-            setAssignments(SAMPLE_ASSIGNMENTS);
+            setAssignments([]);
           }
         } else {
-          setAssignments(SAMPLE_ASSIGNMENTS);
+          setAssignments([]);
         }
       } catch {
-        setAssignments(SAMPLE_ASSIGNMENTS);
+        setAssignments([]);
       } finally {
         setLoaded(true);
       }
@@ -234,10 +234,12 @@ function AppScreen() {
     );
   }, [assignments, loaded]);
 
+  const EMPTY_ERRORS = { title: '', course: '', dueDate: '' };
+
   function openAddModal() {
     setEditingId(null);
     setForm(EMPTY_FORM);
-    setDueDateError('');
+    setFieldErrors(EMPTY_ERRORS);
     setModalVisible(true);
   }
 
@@ -250,21 +252,28 @@ function AppScreen() {
       importance: item.importance,
       status: item.status,
     });
-    setDueDateError('');
+    setFieldErrors(EMPTY_ERRORS);
     setModalVisible(true);
   }
 
   function handleClose() {
     setForm(EMPTY_FORM);
-    setDueDateError('');
+    setFieldErrors(EMPTY_ERRORS);
     setEditingId(null);
     setModalVisible(false);
   }
 
   function handleSave() {
-    if (!form.title.trim() || !form.course.trim() || !form.dueDate.trim()) return;
-    if (!isValidDate(form.dueDate.trim())) {
-      setDueDateError('Enter a valid date in YYYY-MM-DD format (e.g. 2026-06-01)');
+    const errors = { title: '', course: '', dueDate: '' };
+    if (!form.title.trim()) errors.title = 'Title is required';
+    if (!form.course.trim()) errors.course = 'Course is required';
+    if (!form.dueDate.trim()) {
+      errors.dueDate = 'Due date is required';
+    } else if (!isValidDate(form.dueDate.trim())) {
+      errors.dueDate = 'Enter a valid date in YYYY-MM-DD format (e.g. 2026-06-01)';
+    }
+    if (errors.title || errors.course || errors.dueDate) {
+      setFieldErrors(errors);
       return;
     }
     if (editingId) {
@@ -324,8 +333,13 @@ function AppScreen() {
   });
   const sorted = [...sortedIncomplete, ...completed];
 
-  // Highest-priority incomplete assignment for "Work on next"
-  const workOnNext = sortedIncomplete[0] ?? null;
+  // Highest-priority incomplete assignment: importance desc, then due date asc
+  const workOnNext = incomplete.length > 0
+    ? [...incomplete].sort((a, b) => {
+        if (b.importance !== a.importance) return b.importance - a.importance;
+        return a.dueDate.localeCompare(b.dueDate);
+      })[0]
+    : null;
 
   if (!loaded) {
     return (
@@ -376,31 +390,39 @@ function AppScreen() {
 
               <Text style={styles.label}>Title</Text>
               <TextInput
-                style={styles.input}
+                style={[styles.input, fieldErrors.title ? styles.inputError : null]}
                 placeholder="e.g. Problem Set 4"
                 value={form.title}
-                onChangeText={t => setForm(f => ({ ...f, title: t }))}
+                onChangeText={t => {
+                  setForm(f => ({ ...f, title: t }));
+                  if (fieldErrors.title) setFieldErrors(e => ({ ...e, title: '' }));
+                }}
               />
+              {fieldErrors.title ? <Text style={styles.errorText}>{fieldErrors.title}</Text> : null}
 
               <Text style={styles.label}>Course</Text>
               <TextInput
-                style={styles.input}
+                style={[styles.input, fieldErrors.course ? styles.inputError : null]}
                 placeholder="e.g. MATH 201"
                 value={form.course}
-                onChangeText={t => setForm(f => ({ ...f, course: t }))}
+                onChangeText={t => {
+                  setForm(f => ({ ...f, course: t }));
+                  if (fieldErrors.course) setFieldErrors(e => ({ ...e, course: '' }));
+                }}
               />
+              {fieldErrors.course ? <Text style={styles.errorText}>{fieldErrors.course}</Text> : null}
 
               <Text style={styles.label}>Due Date</Text>
               <TextInput
-                style={[styles.input, dueDateError ? styles.inputError : null]}
+                style={[styles.input, fieldErrors.dueDate ? styles.inputError : null]}
                 placeholder="YYYY-MM-DD"
                 value={form.dueDate}
                 onChangeText={t => {
                   setForm(f => ({ ...f, dueDate: t }));
-                  if (dueDateError) setDueDateError('');
+                  if (fieldErrors.dueDate) setFieldErrors(e => ({ ...e, dueDate: '' }));
                 }}
               />
-              {dueDateError ? <Text style={styles.errorText}>{dueDateError}</Text> : null}
+              {fieldErrors.dueDate ? <Text style={styles.errorText}>{fieldErrors.dueDate}</Text> : null}
 
               <Text style={styles.label}>Importance</Text>
               <View style={styles.importanceRow}>
