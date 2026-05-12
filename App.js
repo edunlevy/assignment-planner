@@ -1,11 +1,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { addWeeks, differenceInCalendarDays, isAfter, parseISO } from 'date-fns';
+import { addWeeks, differenceInCalendarDays, format, isAfter, parseISO } from 'date-fns';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
 import {
   Alert,
   FlatList,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -187,6 +188,7 @@ const VALID_STATUSES = new Set(['not_started', 'in_progress', 'completed']);
 function sanitizeAssignment(a) {
   if (!a || typeof a !== 'object') return null;
   if (!a.id || !a.title || !a.course || !a.dueDate) return null;
+  if (!isValidDate(a.dueDate)) return null;
   return {
     ...a,
     importance: (Number.isInteger(a.importance) && a.importance >= 1 && a.importance <= 5)
@@ -312,7 +314,7 @@ function AppScreen() {
       let current = parseISO(form.dueDate.trim());
       let week = 0;
       while (!isAfter(current, until) && week < 52) {
-        const dueDateStr = current.toISOString().slice(0, 10);
+        const dueDateStr = format(current, 'yyyy-MM-dd');
         occurrences.push({
           id: `${seriesId}-${week}`,
           title: form.title.trim(),
@@ -343,21 +345,23 @@ function AppScreen() {
   }
 
   function handleDelete() {
-    Alert.alert(
-      'Delete Assignment',
-      `Delete "${form.title}"?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => {
-            setAssignments(prev => prev.filter(a => a.id !== editingId));
-            handleClose();
-          },
-        },
-      ]
-    );
+    const doDelete = () => {
+      setAssignments(prev => prev.filter(a => a.id !== editingId));
+      handleClose();
+    };
+    if (Platform.OS === 'web') {
+      // eslint-disable-next-line no-alert
+      if (window.confirm(`Delete "${form.title}"?`)) doDelete();
+    } else {
+      Alert.alert(
+        'Delete Assignment',
+        `Delete "${form.title}"?`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Delete', style: 'destructive', onPress: doDelete },
+        ]
+      );
+    }
   }
 
   const incomplete = assignments.filter(a => a.status !== 'completed');
