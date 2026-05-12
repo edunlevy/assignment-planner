@@ -1,5 +1,6 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StatusBar } from 'expo-status-bar';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   FlatList,
   Modal,
@@ -100,11 +101,36 @@ function isValidDate(str) {
   return date.getFullYear() === y && date.getMonth() === m - 1 && date.getDate() === d;
 }
 
+const STORAGE_KEY = 'assignments';
+
 export default function App() {
-  const [assignments, setAssignments] = useState(SAMPLE_ASSIGNMENTS);
+  const [assignments, setAssignments] = useState([]);
+  const [loaded, setLoaded] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [dueDateError, setDueDateError] = useState('');
+
+  // Load saved assignments on first launch; fall back to sample data for new installs
+  useEffect(() => {
+    AsyncStorage.getItem(STORAGE_KEY).then(json => {
+      if (json) {
+        try {
+          setAssignments(JSON.parse(json));
+        } catch {
+          setAssignments(SAMPLE_ASSIGNMENTS);
+        }
+      } else {
+        setAssignments(SAMPLE_ASSIGNMENTS);
+      }
+      setLoaded(true);
+    });
+  }, []);
+
+  // Persist whenever the list changes (skip the initial empty state before loading)
+  useEffect(() => {
+    if (!loaded) return;
+    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(assignments));
+  }, [assignments, loaded]);
 
   function handleAdd() {
     if (!form.title.trim() || !form.course.trim() || !form.dueDate.trim()) return;
@@ -135,6 +161,14 @@ export default function App() {
   const incomplete = assignments.filter(a => a.status !== 'completed');
   const completed = assignments.filter(a => a.status === 'completed');
   const sorted = [...incomplete, ...completed];
+
+  if (!loaded) {
+    return (
+      <View style={styles.loadingContainer}>
+        <Text style={styles.loadingText}>Loading…</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -252,6 +286,16 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F0F4FF',
+  },
+  loadingContainer: {
+    flex: 1,
+    backgroundColor: '#F0F4FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadingText: {
+    color: '#888',
+    fontSize: 16,
   },
 
   // Header
