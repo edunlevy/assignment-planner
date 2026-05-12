@@ -4,6 +4,7 @@ import {
   FlatList,
   Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -16,6 +17,7 @@ const SAMPLE_ASSIGNMENTS = [
     title: 'Problem Set 3',
     course: 'MATH 201',
     dueDate: '2026-05-14',
+    importance: 4,
     status: 'not_started',
   },
   {
@@ -23,6 +25,7 @@ const SAMPLE_ASSIGNMENTS = [
     title: 'Lab Report — Titration',
     course: 'CHEM 110',
     dueDate: '2026-05-15',
+    importance: 5,
     status: 'in_progress',
   },
   {
@@ -30,6 +33,7 @@ const SAMPLE_ASSIGNMENTS = [
     title: 'Essay Draft',
     course: 'ENG 102',
     dueDate: '2026-05-18',
+    importance: 3,
     status: 'not_started',
   },
   {
@@ -37,6 +41,7 @@ const SAMPLE_ASSIGNMENTS = [
     title: 'Reading Response',
     course: 'HIST 220',
     dueDate: '2026-05-12',
+    importance: 2,
     status: 'completed',
   },
 ];
@@ -53,6 +58,19 @@ const STATUS_COLORS = {
   completed: '#6BCB77',
 };
 
+function ImportanceDots({ value }) {
+  return (
+    <View style={styles.dotsRow}>
+      {[1, 2, 3, 4, 5].map(n => (
+        <View
+          key={n}
+          style={[styles.dot, n <= value ? styles.dotFilled : styles.dotEmpty]}
+        />
+      ))}
+    </View>
+  );
+}
+
 function AssignmentRow({ item }) {
   const isCompleted = item.status === 'completed';
   return (
@@ -63,6 +81,7 @@ function AssignmentRow({ item }) {
         </Text>
         <Text style={styles.cardCourse}>{item.course}</Text>
         <Text style={styles.cardDue}>Due {item.dueDate}</Text>
+        <ImportanceDots value={item.importance} />
       </View>
       <View style={[styles.badge, { backgroundColor: STATUS_COLORS[item.status] }]}>
         <Text style={styles.badgeText}>{STATUS_LABELS[item.status]}</Text>
@@ -71,10 +90,12 @@ function AssignmentRow({ item }) {
   );
 }
 
+const EMPTY_FORM = { title: '', course: '', dueDate: '', importance: 3 };
+
 export default function App() {
   const [assignments, setAssignments] = useState(SAMPLE_ASSIGNMENTS);
   const [modalVisible, setModalVisible] = useState(false);
-  const [form, setForm] = useState({ title: '', course: '', dueDate: '' });
+  const [form, setForm] = useState(EMPTY_FORM);
 
   function handleAdd() {
     if (!form.title.trim() || !form.course.trim() || !form.dueDate.trim()) return;
@@ -83,10 +104,16 @@ export default function App() {
       title: form.title.trim(),
       course: form.course.trim(),
       dueDate: form.dueDate.trim(),
+      importance: form.importance,
       status: 'not_started',
     };
     setAssignments(prev => [newAssignment, ...prev]);
-    setForm({ title: '', course: '', dueDate: '' });
+    setForm(EMPTY_FORM);
+    setModalVisible(false);
+  }
+
+  function handleClose() {
+    setForm(EMPTY_FORM);
     setModalVisible(false);
   }
 
@@ -101,9 +128,7 @@ export default function App() {
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Assignment Planner</Text>
-        <Text style={styles.headerSub}>
-          {incomplete.length} remaining
-        </Text>
+        <Text style={styles.headerSub}>{incomplete.length} remaining</Text>
       </View>
 
       {/* List */}
@@ -123,41 +148,78 @@ export default function App() {
       </Pressable>
 
       {/* Add assignment modal */}
-      <Modal visible={modalVisible} animationType="slide" transparent onRequestClose={() => setModalVisible(false)}>
+      <Modal
+        visible={modalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={handleClose}
+      >
         <View style={styles.modalOverlay}>
           <View style={styles.modalSheet}>
-            <Text style={styles.modalTitle}>New Assignment</Text>
+            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              <Text style={styles.modalTitle}>New Assignment</Text>
 
-            <Text style={styles.label}>Title</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="e.g. Problem Set 4"
-              value={form.title}
-              onChangeText={t => setForm(f => ({ ...f, title: t }))}
-            />
+              <Text style={styles.label}>Title</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="e.g. Problem Set 4"
+                value={form.title}
+                onChangeText={t => setForm(f => ({ ...f, title: t }))}
+              />
 
-            <Text style={styles.label}>Course</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="e.g. MATH 201"
-              value={form.course}
-              onChangeText={t => setForm(f => ({ ...f, course: t }))}
-            />
+              <Text style={styles.label}>Course</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="e.g. MATH 201"
+                value={form.course}
+                onChangeText={t => setForm(f => ({ ...f, course: t }))}
+              />
 
-            <Text style={styles.label}>Due Date</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="YYYY-MM-DD"
-              value={form.dueDate}
-              onChangeText={t => setForm(f => ({ ...f, dueDate: t }))}
-            />
+              <Text style={styles.label}>Due Date</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="YYYY-MM-DD"
+                value={form.dueDate}
+                onChangeText={t => setForm(f => ({ ...f, dueDate: t }))}
+              />
 
-            <Pressable style={styles.saveButton} onPress={handleAdd}>
-              <Text style={styles.saveButtonText}>Save Assignment</Text>
-            </Pressable>
-            <Pressable style={styles.cancelButton} onPress={() => setModalVisible(false)}>
-              <Text style={styles.cancelButtonText}>Cancel</Text>
-            </Pressable>
+              <Text style={styles.label}>Importance</Text>
+              <View style={styles.importanceRow}>
+                {[1, 2, 3, 4, 5].map(n => (
+                  <Pressable
+                    key={n}
+                    style={[
+                      styles.importanceButton,
+                      form.importance === n && styles.importanceButtonSelected,
+                    ]}
+                    onPress={() => setForm(f => ({ ...f, importance: n }))}
+                  >
+                    <Text
+                      style={[
+                        styles.importanceButtonText,
+                        form.importance === n && styles.importanceButtonTextSelected,
+                      ]}
+                    >
+                      {n}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+              <Text style={styles.importanceHint}>
+                {form.importance === 1 && 'Low priority'}
+                {form.importance === 2 && 'Minor'}
+                {form.importance === 3 && 'Normal'}
+                {form.importance === 4 && 'Important'}
+                {form.importance === 5 && 'Critical — do this first!'}
+              </Text>
+
+              <Pressable style={styles.saveButton} onPress={handleAdd}>
+                <Text style={styles.saveButtonText}>Save Assignment</Text>
+              </Pressable>
+              <Pressable style={styles.cancelButton} onPress={handleClose}>
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </Pressable>
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -242,6 +304,24 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
 
+  // Importance dots (on card)
+  dotsRow: {
+    flexDirection: 'row',
+    marginTop: 6,
+    gap: 4,
+  },
+  dot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+  },
+  dotFilled: {
+    backgroundColor: '#3B5BDB',
+  },
+  dotEmpty: {
+    backgroundColor: '#DDE2FF',
+  },
+
   // Status badge
   badge: {
     borderRadius: 20,
@@ -290,6 +370,7 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 20,
     padding: 24,
     paddingBottom: 40,
+    maxHeight: '90%',
   },
   modalTitle: {
     fontSize: 20,
@@ -313,6 +394,41 @@ const styles = StyleSheet.create({
     color: '#1A1A2E',
     backgroundColor: '#F8F9FF',
   },
+
+  // Importance picker (in form)
+  importanceRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 4,
+  },
+  importanceButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 2,
+    borderColor: '#DDE2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F8F9FF',
+  },
+  importanceButtonSelected: {
+    backgroundColor: '#3B5BDB',
+    borderColor: '#3B5BDB',
+  },
+  importanceButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#3B5BDB',
+  },
+  importanceButtonTextSelected: {
+    color: '#FFFFFF',
+  },
+  importanceHint: {
+    fontSize: 12,
+    color: '#888',
+    marginTop: 6,
+  },
+
   saveButton: {
     backgroundColor: '#3B5BDB',
     borderRadius: 12,
