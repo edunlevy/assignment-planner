@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { cancelAllReminders } from '../lib/notifications';
+import { cancelAllReminders, saveReminderMap } from '../lib/notifications';
 import { supabase } from '../lib/supabase';
 
-export default function ProfileModal({ visible, onClose, email }) {
+export default function ProfileModal({ visible, onClose, email, userId }) {
   const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -13,13 +13,14 @@ export default function ProfileModal({ visible, onClose, email }) {
     setLoading(true);
     setError('');
     try {
-      // Cancel all scheduled notifications before signing out so reminders
-      // for this account don't fire for the next user of the device.
-      await cancelAllReminders();
       const { error: err } = await supabase.auth.signOut();
       if (err) {
         setError('Could not sign out. Please try again.');
       } else {
+        // Sign-out succeeded — now safe to cancel reminders and wipe
+        // the local reminder map so the next sign-in reschedules fresh.
+        await cancelAllReminders();
+        if (userId) saveReminderMap(userId, {});
         onClose();
       }
     } finally {

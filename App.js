@@ -270,9 +270,27 @@ function AppScreen() {
           loadReminderMap(userId),
         ]);
         if (!cancelled) {
-          const withReminders = mergeReminderIds(fresh, reminderMap);
-          setAssignments(withReminders);
-          AsyncStorage.setItem(storageKey(userId), JSON.stringify(withReminders)).catch(() => {});
+          const merged = mergeReminderIds(fresh, reminderMap);
+
+          // Reschedule reminders for incomplete assignments that have none
+          // (covers the case where reminders were cleared on sign-out).
+          const updatedMap = { ...reminderMap };
+          const withReminders = await Promise.all(
+            merged.map(async a => {
+              if (a.status === 'completed' || a.reminderIds.length > 0) return a;
+              const ids = await scheduleReminders(a);
+              if (ids.length > 0) updatedMap[a.id] = ids;
+              return { ...a, reminderIds: ids };
+            })
+          );
+          if (!cancelled) {
+            if (Object.keys(updatedMap).length !== Object.keys(reminderMap).length ||
+                Object.keys(updatedMap).some(k => updatedMap[k] !== reminderMap[k])) {
+              saveReminderMap(userId, updatedMap);
+            }
+            setAssignments(withReminders);
+            AsyncStorage.setItem(storageKey(userId), JSON.stringify(withReminders)).catch(() => {});
+          }
         }
       } catch {
         if (!cancelled) {
@@ -719,6 +737,7 @@ function AppScreen() {
         visible={profileVisible}
         onClose={() => setProfileVisible(false)}
         email={session?.user?.email ?? ''}
+        userId={session?.user?.id}
       />
 
       <ResetPasswordModal
