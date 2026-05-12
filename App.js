@@ -148,7 +148,7 @@ function AppScreen() {
           const parsed = JSON.parse(json);
           if (Array.isArray(parsed)) {
             const clean = parsed.map(sanitizeAssignment).filter(Boolean);
-            setAssignments(clean.length > 0 ? clean : SAMPLE_ASSIGNMENTS);
+            setAssignments(clean);
           } else {
             setAssignments(SAMPLE_ASSIGNMENTS);
           }
