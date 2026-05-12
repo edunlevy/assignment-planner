@@ -2,9 +2,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { addWeeks, differenceInCalendarDays, format, isAfter, parseISO } from 'date-fns';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
+import { dbDelete, dbFetch, dbInsert, dbInsertMany, dbUpdate } from './lib/assignmentsDb';
 import { supabase } from './lib/supabase';
 import AuthScreen from './screens/AuthScreen';
 import {
+  ActivityIndicator,
   Alert,
   FlatList,
   Modal,
@@ -210,6 +212,8 @@ function AppScreen() {
   const [sessionLoaded, setSessionLoaded] = useState(false);
   const [assignments, setAssignments] = useState([]);
   const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [syncError, setSyncError] = useState('');
   const [modalVisible, setModalVisible] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -223,7 +227,6 @@ function AppScreen() {
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
       setSession(s);
-      // Clear in-memory assignments when user signs out so next user starts clean
       if (!s) {
         setAssignments([]);
         setLoaded(false);
@@ -232,43 +235,40 @@ function AppScreen() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // Load assignments scoped to the logged-in user
+  // Load assignments: Supabase (source of truth) with AsyncStorage as offline fallback
   useEffect(() => {
     if (!session) return;
     const userId = session.user.id;
     let cancelled = false;
     setLoaded(false);
+    setSyncError('');
     (async () => {
       try {
-        const json = await AsyncStorage.getItem(storageKey(userId));
-        if (cancelled) return;
-        if (json) {
-          const parsed = JSON.parse(json);
+        // Show cached data immediately while Supabase loads
+        const cached = await AsyncStorage.getItem(storageKey(userId));
+        if (!cancelled && cached) {
+          const parsed = JSON.parse(cached);
           if (Array.isArray(parsed)) {
-            const clean = parsed.map(sanitizeAssignment).filter(Boolean);
-            setAssignments(clean);
-          } else {
-            setAssignments([]);
+            setAssignments(parsed.map(sanitizeAssignment).filter(Boolean));
           }
-        } else {
-          setAssignments([]);
         }
-      } catch {
-        if (!cancelled) setAssignments([]);
+        // Replace with fresh Supabase data
+        const fresh = await dbFetch();
+        if (!cancelled) {
+          setAssignments(fresh);
+          AsyncStorage.setItem(storageKey(userId), JSON.stringify(fresh)).catch(() => {});
+        }
+      } catch (e) {
+        if (!cancelled) {
+          // Supabase unavailable — keep showing the cached data
+          setSyncError('Could not reach the server. Showing cached data.');
+        }
       } finally {
         if (!cancelled) setLoaded(true);
       }
     })();
     return () => { cancelled = true; };
-  }, [session?.user?.id]); // re-run only when the user ID changes
-
-  // Persist scoped to the logged-in user
-  useEffect(() => {
-    if (!loaded || !session) return;
-    AsyncStorage.setItem(storageKey(session.user.id), JSON.stringify(assignments)).catch(e =>
-      console.warn('Failed to save assignments:', e)
-    );
-  }, [assignments, loaded, session?.user?.id]);
+  }, [session?.user?.id]);
 
   const EMPTY_ERRORS = { title: '', course: '', dueDate: '', repeatUntil: '' };
 
@@ -299,7 +299,7 @@ function AppScreen() {
     setModalVisible(false);
   }
 
-  function handleSave() {
+  async function handleSave() {
     const errors = { title: '', course: '', dueDate: '', repeatUntil: '' };
     if (!form.title.trim()) errors.title = 'Title is required';
     if (!form.course.trim()) errors.course = 'Course is required';
@@ -322,63 +322,85 @@ function AppScreen() {
       return;
     }
 
-    if (editingId) {
-      setAssignments(prev =>
-        prev.map(a =>
-          a.id === editingId
-            ? {
-                ...a,
-                title: form.title.trim(),
-                course: form.course.trim(),
-                dueDate: form.dueDate.trim(),
-                importance: form.importance,
-                status: form.status,
-              }
-            : a
-        )
-      );
-    } else if (form.repeatWeekly) {
-      // Generate all weekly occurrences up front, capped at 52 (1 year)
-      const seriesId = Date.now().toString();
-      const until = parseISO(form.repeatUntil.trim());
-      const occurrences = [];
-      let current = parseISO(form.dueDate.trim());
-      let week = 0;
-      while (!isAfter(current, until) && week < 52) {
-        const dueDateStr = format(current, 'yyyy-MM-dd');
-        occurrences.push({
-          id: `${seriesId}-${week}`,
+    setSaving(true);
+    setSyncError('');
+    try {
+      if (editingId) {
+        const updated = await dbUpdate(editingId, {
           title: form.title.trim(),
           course: form.course.trim(),
-          dueDate: dueDateStr,
+          dueDate: form.dueDate.trim(),
           importance: form.importance,
-          status: 'not_started',
-          seriesId,
+          status: form.status,
         });
-        current = addWeeks(current, 1);
-        week++;
-      }
-      setAssignments(prev => [...occurrences, ...prev]);
-    } else {
-      setAssignments(prev => [
-        {
-          id: Date.now().toString(),
+        setAssignments(prev => {
+          const next = prev.map(a => a.id === editingId ? updated : a);
+          AsyncStorage.setItem(storageKey(session.user.id), JSON.stringify(next)).catch(() => {});
+          return next;
+        });
+      } else if (form.repeatWeekly) {
+        const seriesId = Date.now().toString();
+        const until = parseISO(form.repeatUntil.trim());
+        const drafts = [];
+        let current = parseISO(form.dueDate.trim());
+        let week = 0;
+        while (!isAfter(current, until) && week < 52) {
+          drafts.push({
+            title: form.title.trim(),
+            course: form.course.trim(),
+            dueDate: format(current, 'yyyy-MM-dd'),
+            importance: form.importance,
+            status: 'not_started',
+            seriesId,
+          });
+          current = addWeeks(current, 1);
+          week++;
+        }
+        const saved = await dbInsertMany(drafts, session.user.id);
+        setAssignments(prev => {
+          const next = [...saved, ...prev];
+          AsyncStorage.setItem(storageKey(session.user.id), JSON.stringify(next)).catch(() => {});
+          return next;
+        });
+      } else {
+        const saved = await dbInsert({
           title: form.title.trim(),
           course: form.course.trim(),
           dueDate: form.dueDate.trim(),
           importance: form.importance,
           status: 'not_started',
-        },
-        ...prev,
-      ]);
+        }, session.user.id);
+        setAssignments(prev => {
+          const next = [saved, ...prev];
+          AsyncStorage.setItem(storageKey(session.user.id), JSON.stringify(next)).catch(() => {});
+          return next;
+        });
+      }
+      handleClose();
+    } catch (e) {
+      setSyncError('Could not save. Check your connection and try again.');
+    } finally {
+      setSaving(false);
     }
-    handleClose();
   }
 
   function handleDelete() {
-    const doDelete = () => {
-      setAssignments(prev => prev.filter(a => a.id !== editingId));
-      handleClose();
+    const doDelete = async () => {
+      setSaving(true);
+      setSyncError('');
+      try {
+        await dbDelete(editingId);
+        setAssignments(prev => {
+          const next = prev.filter(a => a.id !== editingId);
+          AsyncStorage.setItem(storageKey(session.user.id), JSON.stringify(next)).catch(() => {});
+          return next;
+        });
+        handleClose();
+      } catch {
+        setSyncError('Could not delete. Check your connection and try again.');
+      } finally {
+        setSaving(false);
+      }
     };
     if (Platform.OS === 'web') {
       // eslint-disable-next-line no-alert
@@ -454,6 +476,12 @@ function AppScreen() {
           </Pressable>
         </View>
       </View>
+
+      {syncError ? (
+        <Pressable style={styles.syncErrorBanner} onPress={() => setSyncError('')}>
+          <Text style={styles.syncErrorText}>{syncError}  ✕</Text>
+        </Pressable>
+      ) : null}
 
       <FlatList
         data={sorted}
@@ -605,19 +633,30 @@ function AppScreen() {
                 </>
               )}
 
-              <Pressable style={styles.saveButton} onPress={handleSave}>
-                <Text style={styles.saveButtonText}>
-                  {isEditing ? 'Save Changes' : 'Save Assignment'}
-                </Text>
+              <Pressable
+                style={[styles.saveButton, saving && { opacity: 0.6 }]}
+                onPress={handleSave}
+                disabled={saving}
+              >
+                {saving
+                  ? <ActivityIndicator color="#fff" />
+                  : <Text style={styles.saveButtonText}>
+                      {isEditing ? 'Save Changes' : 'Save Assignment'}
+                    </Text>
+                }
               </Pressable>
 
               {isEditing && (
-                <Pressable style={styles.deleteButton} onPress={handleDelete}>
+                <Pressable
+                  style={[styles.deleteButton, saving && { opacity: 0.4 }]}
+                  onPress={handleDelete}
+                  disabled={saving}
+                >
                   <Text style={styles.deleteButtonText}>Delete Assignment</Text>
                 </Pressable>
               )}
 
-              <Pressable style={styles.cancelButton} onPress={handleClose}>
+              <Pressable style={styles.cancelButton} onPress={handleClose} disabled={saving}>
                 <Text style={styles.cancelButtonText}>Cancel</Text>
               </Pressable>
             </ScrollView>
@@ -937,5 +976,19 @@ const styles = StyleSheet.create({
   cancelButtonText: {
     color: '#888',
     fontSize: 15,
+  },
+
+  // Sync error banner
+  syncErrorBanner: {
+    backgroundColor: '#FEF2F2',
+    borderBottomWidth: 1,
+    borderBottomColor: '#FECACA',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  syncErrorText: {
+    color: '#DC2626',
+    fontSize: 13,
+    textAlign: 'center',
   },
 });
