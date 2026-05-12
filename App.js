@@ -7,6 +7,7 @@ import { cancelReminders, loadReminderMap, mergeReminderIds, requestNotification
 import { supabase } from './lib/supabase';
 import AuthScreen from './screens/AuthScreen';
 import ProfileModal from './screens/ProfileModal';
+import ResetPasswordModal from './screens/ResetPasswordModal';
 import {
   ActivityIndicator,
   Alert,
@@ -184,6 +185,7 @@ function AppScreen() {
   const [saving, setSaving] = useState(false);
   const [syncError, setSyncError] = useState('');
   const [profileVisible, setProfileVisible] = useState(false);
+  const [recoveryMode, setRecoveryMode] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -195,11 +197,15 @@ function AppScreen() {
       setSession(s);
       setSessionLoaded(true);
     });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
       setSession(s);
+      if (event === 'PASSWORD_RECOVERY') {
+        setRecoveryMode(true);
+      }
       if (!s) {
         setAssignments([]);
         setLoaded(false);
+        setRecoveryMode(false);
       }
     });
     return () => subscription.unsubscribe();
@@ -688,6 +694,11 @@ function AppScreen() {
         visible={profileVisible}
         onClose={() => setProfileVisible(false)}
         email={session?.user?.email ?? ''}
+      />
+
+      <ResetPasswordModal
+        visible={recoveryMode}
+        onDone={() => setRecoveryMode(false)}
       />
     </View>
   );

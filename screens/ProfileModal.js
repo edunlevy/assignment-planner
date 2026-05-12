@@ -1,13 +1,26 @@
-import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../lib/supabase';
 
 export default function ProfileModal({ visible, onClose, email }) {
   const insets = useSafeAreaInsets();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
   async function handleSignOut() {
-    await supabase.auth.signOut();
-    onClose();
+    setLoading(true);
+    setError('');
+    try {
+      const { error: err } = await supabase.auth.signOut();
+      if (err) {
+        setError('Could not sign out. Please try again.');
+      } else {
+        onClose();
+      }
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -29,11 +42,20 @@ export default function ProfileModal({ visible, onClose, email }) {
             <Text style={styles.emailValue} numberOfLines={1}>{email}</Text>
           </View>
 
-          <Pressable style={styles.signOutButton} onPress={handleSignOut}>
-            <Text style={styles.signOutText}>Sign Out</Text>
+          <Pressable
+            style={[styles.signOutButton, loading && styles.signOutButtonDisabled]}
+            onPress={handleSignOut}
+            disabled={loading}
+          >
+            {loading
+              ? <ActivityIndicator color="#DC2626" />
+              : <Text style={styles.signOutText}>Sign Out</Text>
+            }
           </Pressable>
 
-          <Pressable style={styles.closeButton} onPress={onClose}>
+          {error ? <Text style={styles.error}>{error}</Text> : null}
+
+          <Pressable style={styles.closeButton} onPress={onClose} disabled={loading}>
             <Text style={styles.closeText}>Close</Text>
           </Pressable>
 
@@ -97,10 +119,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 10,
   },
+  signOutButtonDisabled: {
+    opacity: 0.6,
+  },
   signOutText: {
     color: '#DC2626',
     fontWeight: '700',
     fontSize: 15,
+  },
+  error: {
+    color: '#DC2626',
+    fontSize: 13,
+    textAlign: 'center',
+    marginTop: 8,
   },
   closeButton: {
     alignItems: 'center',
