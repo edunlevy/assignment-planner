@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { addWeeks, differenceInCalendarDays, format, isAfter, parseISO } from 'date-fns';
+import * as Linking from 'expo-linking';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
 import { dbDelete, dbFetch, dbInsert, dbInsertMany, dbUpdate } from './lib/assignmentsDb';
@@ -209,6 +210,33 @@ function AppScreen() {
       }
     });
     return () => subscription.unsubscribe();
+  }, []);
+
+  // Handle password-reset deep links (assignmentplanner://reset-password#access_token=...&type=recovery)
+  // With detectSessionInUrl:false we must parse the URL ourselves and call setSession to
+  // give Supabase the recovery tokens, which then fires onAuthStateChange(PASSWORD_RECOVERY).
+  useEffect(() => {
+    function handleDeepLink(url) {
+      if (!url) return;
+      // Supabase puts tokens after the # fragment
+      const fragment = url.includes('#') ? url.split('#')[1] : '';
+      if (!fragment) return;
+      const params = Object.fromEntries(
+        fragment.split('&').map(pair => pair.split('=').map(decodeURIComponent))
+      );
+      if (params.type === 'recovery' && params.access_token) {
+        supabase.auth.setSession({
+          access_token: params.access_token,
+          refresh_token: params.refresh_token ?? '',
+        }).catch(() => {});
+      }
+    }
+
+    // Cold start: app was launched by tapping the link
+    Linking.getInitialURL().then(handleDeepLink);
+    // Warm start: app was already open when the link was tapped
+    const sub = Linking.addEventListener('url', ({ url }) => handleDeepLink(url));
+    return () => sub.remove();
   }, []);
 
   // Request notification permission once when the user is logged in
