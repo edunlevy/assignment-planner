@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { cancelAllReminders } from '../lib/notifications';
 import { supabase } from '../lib/supabase';
 
 export default function ProfileModal({ visible, onClose, email }) {
@@ -12,6 +13,9 @@ export default function ProfileModal({ visible, onClose, email }) {
     setLoading(true);
     setError('');
     try {
+      // Cancel all scheduled notifications before signing out so reminders
+      // for this account don't fire for the next user of the device.
+      await cancelAllReminders();
       const { error: err } = await supabase.auth.signOut();
       if (err) {
         setError('Could not sign out. Please try again.');
