@@ -12,6 +12,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const SAMPLE_ASSIGNMENTS = [
   {
@@ -113,9 +114,24 @@ function isValidDate(str) {
   return date.getFullYear() === y && date.getMonth() === m - 1 && date.getDate() === d;
 }
 
+const VALID_STATUSES = new Set(['not_started', 'in_progress', 'completed']);
+
+function sanitizeAssignment(a) {
+  if (!a || typeof a !== 'object') return null;
+  if (!a.id || !a.title || !a.course || !a.dueDate) return null;
+  return {
+    ...a,
+    importance: (Number.isInteger(a.importance) && a.importance >= 1 && a.importance <= 5)
+      ? a.importance
+      : 3,
+    status: VALID_STATUSES.has(a.status) ? a.status : 'not_started',
+  };
+}
+
 const STORAGE_KEY = 'assignments';
 
-export default function App() {
+function AppScreen() {
+  const insets = useSafeAreaInsets();
   const [assignments, setAssignments] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
@@ -130,7 +146,12 @@ export default function App() {
         const json = await AsyncStorage.getItem(STORAGE_KEY);
         if (json) {
           const parsed = JSON.parse(json);
-          setAssignments(Array.isArray(parsed) ? parsed : SAMPLE_ASSIGNMENTS);
+          if (Array.isArray(parsed)) {
+            const clean = parsed.map(sanitizeAssignment).filter(Boolean);
+            setAssignments(clean.length > 0 ? clean : SAMPLE_ASSIGNMENTS);
+          } else {
+            setAssignments(SAMPLE_ASSIGNMENTS);
+          }
         } else {
           setAssignments(SAMPLE_ASSIGNMENTS);
         }
@@ -260,7 +281,7 @@ export default function App() {
       <StatusBar style="light" />
 
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + 16 }]}>
         <Text style={styles.headerTitle}>Assignment Planner</Text>
         <Text style={styles.headerSub}>{incomplete.length} remaining</Text>
       </View>
@@ -279,7 +300,7 @@ export default function App() {
       />
 
       {/* Add button */}
-      <Pressable style={styles.fab} onPress={openAddModal}>
+      <Pressable style={[styles.fab, { bottom: insets.bottom + 16 }]} onPress={openAddModal}>
         <Text style={styles.fabText}>+</Text>
       </Pressable>
 
@@ -291,7 +312,7 @@ export default function App() {
         onRequestClose={handleClose}
       >
         <View style={styles.modalOverlay}>
-          <View style={styles.modalSheet}>
+          <View style={[styles.modalSheet, { paddingBottom: insets.bottom + 24 }]}>
             <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
               <Text style={styles.modalTitle}>
                 {isEditing ? 'Edit Assignment' : 'New Assignment'}
@@ -405,6 +426,14 @@ export default function App() {
   );
 }
 
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <AppScreen />
+    </SafeAreaProvider>
+  );
+}
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -424,7 +453,6 @@ const styles = StyleSheet.create({
   // Header
   header: {
     backgroundColor: '#3B5BDB',
-    paddingTop: 60,
     paddingBottom: 20,
     paddingHorizontal: 20,
   },
@@ -526,7 +554,6 @@ const styles = StyleSheet.create({
   // FAB
   fab: {
     position: 'absolute',
-    bottom: 32,
     right: 24,
     width: 58,
     height: 58,
@@ -557,7 +584,6 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     padding: 24,
-    paddingBottom: 40,
     maxHeight: '90%',
   },
   modalTitle: {
