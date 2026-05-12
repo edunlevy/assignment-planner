@@ -235,10 +235,13 @@ function AppScreen() {
   // Load assignments scoped to the logged-in user
   useEffect(() => {
     if (!session) return;
+    const userId = session.user.id;
+    let cancelled = false;
     setLoaded(false);
     (async () => {
       try {
-        const json = await AsyncStorage.getItem(storageKey(session.user.id));
+        const json = await AsyncStorage.getItem(storageKey(userId));
+        if (cancelled) return;
         if (json) {
           const parsed = JSON.parse(json);
           if (Array.isArray(parsed)) {
@@ -251,11 +254,12 @@ function AppScreen() {
           setAssignments([]);
         }
       } catch {
-        setAssignments([]);
+        if (!cancelled) setAssignments([]);
       } finally {
-        setLoaded(true);
+        if (!cancelled) setLoaded(true);
       }
     })();
+    return () => { cancelled = true; };
   }, [session?.user?.id]); // re-run only when the user ID changes
 
   // Persist scoped to the logged-in user
