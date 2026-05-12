@@ -3,7 +3,7 @@ import { addWeeks, differenceInCalendarDays, format, isAfter, parseISO } from 'd
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
 import { dbDelete, dbFetch, dbInsert, dbInsertMany, dbUpdate } from './lib/assignmentsDb';
-import { cancelReminders, requestNotificationPermission, scheduleReminders } from './lib/notifications';
+import { cancelReminders, loadReminderMap, mergeReminderIds, requestNotificationPermission, saveReminderMap, scheduleReminders } from './lib/notifications';
 import { supabase } from './lib/supabase';
 import AuthScreen from './screens/AuthScreen';
 import {
@@ -266,10 +266,14 @@ function AppScreen() {
 
       // Always attempt to fetch fresh data from Supabase
       try {
-        const fresh = await dbFetch(userId);
+        const [fresh, reminderMap] = await Promise.all([
+          dbFetch(userId),
+          loadReminderMap(userId),
+        ]);
         if (!cancelled) {
-          setAssignments(fresh);
-          AsyncStorage.setItem(storageKey(userId), JSON.stringify(fresh)).catch(() => {});
+          const withReminders = mergeReminderIds(fresh, reminderMap);
+          setAssignments(withReminders);
+          AsyncStorage.setItem(storageKey(userId), JSON.stringify(withReminders)).catch(() => {});
         }
       } catch {
         if (!cancelled) {
@@ -355,6 +359,11 @@ function AppScreen() {
           ? await scheduleReminders(updated)
           : [];
 
+        // Persist the updated reminder map so IDs survive a Supabase re-fetch
+        const reminderMap = await loadReminderMap(session.user.id);
+        reminderMap[editingId] = reminderIds;
+        saveReminderMap(session.user.id, reminderMap);
+
         const finalAssignment = { ...updated, reminderIds };
         setAssignments(prev => {
           const next = prev.map(a => a.id === editingId ? finalAssignment : a);
@@ -384,6 +393,10 @@ function AppScreen() {
         const savedWithReminders = await Promise.all(
           saved.map(async a => ({ ...a, reminderIds: await scheduleReminders(a) }))
         );
+        // Persist the reminder map for each new occurrence
+        const reminderMap = await loadReminderMap(session.user.id);
+        for (const a of savedWithReminders) reminderMap[a.id] = a.reminderIds;
+        saveReminderMap(session.user.id, reminderMap);
         setAssignments(prev => {
           const next = [...savedWithReminders, ...prev];
           AsyncStorage.setItem(storageKey(session.user.id), JSON.stringify(next)).catch(() => {});
@@ -398,6 +411,10 @@ function AppScreen() {
           status: 'not_started',
         }, session.user.id);
         const reminderIds = await scheduleReminders(saved);
+        // Persist reminder IDs so they survive a Supabase re-fetch
+        const reminderMap = await loadReminderMap(session.user.id);
+        reminderMap[saved.id] = reminderIds;
+        saveReminderMap(session.user.id, reminderMap);
         const savedWithReminders = { ...saved, reminderIds };
         setAssignments(prev => {
           const next = [savedWithReminders, ...prev];
@@ -421,6 +438,10 @@ function AppScreen() {
         const deletingAssignment = assignments.find(a => a.id === editingId);
         await dbDelete(editingId, session.user.id);
         await cancelReminders(deletingAssignment?.reminderIds);
+        // Remove from the reminder map so IDs don't linger
+        const reminderMap = await loadReminderMap(session.user.id);
+        delete reminderMap[editingId];
+        saveReminderMap(session.user.id, reminderMap);
         setAssignments(prev => {
           const next = prev.filter(a => a.id !== editingId);
           AsyncStorage.setItem(storageKey(session.user.id), JSON.stringify(next)).catch(() => {});
