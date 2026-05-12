@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { differenceInCalendarDays, parseISO } from 'date-fns';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
 import {
@@ -69,21 +70,67 @@ const IMPORTANCE_HINTS = {
   5: 'Critical — do this first!',
 };
 
-function ImportanceDots({ value }) {
+// Importance bar: 5 filled segments, color shifts from light to deep blue
+const IMPORTANCE_SEGMENT_COLORS = ['#BFC8FF', '#91A7FF', '#5C7CFA', '#3B5BDB', '#1E3A8A'];
+
+function dueDateLabel(dueDateStr) {
+  try {
+    const days = differenceInCalendarDays(parseISO(dueDateStr), new Date());
+    if (days < 0) return { text: 'Overdue', urgent: true };
+    if (days === 0) return { text: 'Due today', urgent: true };
+    if (days === 1) return { text: 'Due tomorrow', urgent: true };
+    if (days <= 7) return { text: `Due in ${days} days`, urgent: false };
+    return { text: `Due ${dueDateStr}`, urgent: false };
+  } catch {
+    return { text: `Due ${dueDateStr}`, urgent: false };
+  }
+}
+
+function ImportanceBar({ value }) {
   return (
-    <View style={styles.dotsRow}>
+    <View className="flex-row gap-1 mt-1.5">
       {[1, 2, 3, 4, 5].map(n => (
         <View
           key={n}
-          style={[styles.dot, n <= value ? styles.dotFilled : styles.dotEmpty]}
+          className="h-1.5 flex-1 rounded-full"
+          style={{ backgroundColor: n <= value ? IMPORTANCE_SEGMENT_COLORS[n - 1] : '#E8ECFF' }}
         />
       ))}
     </View>
   );
 }
 
+function WorkOnNextCard({ assignment }) {
+  const label = dueDateLabel(assignment.dueDate);
+  return (
+    <View className="mx-4 mb-3 rounded-2xl overflow-hidden" style={{ backgroundColor: '#1E3A8A' }}>
+      <View className="px-4 pt-4 pb-1">
+        <Text className="text-xs font-bold tracking-widest uppercase" style={{ color: '#93C5FD' }}>
+          Work on next
+        </Text>
+      </View>
+      <View className="px-4 pb-4">
+        <Text className="text-lg font-bold text-white mt-0.5">{assignment.title}</Text>
+        <Text className="text-sm mt-0.5" style={{ color: '#BFDBFE' }}>{assignment.course}</Text>
+        <View className="flex-row items-center mt-2 gap-2">
+          <View
+            className="rounded-full px-2.5 py-0.5"
+            style={{ backgroundColor: label.urgent ? '#EF4444' : 'rgba(255,255,255,0.15)' }}
+          >
+            <Text className="text-xs font-semibold text-white">{label.text}</Text>
+          </View>
+          <Text className="text-xs" style={{ color: '#BFDBFE' }}>
+            Importance {assignment.importance}/5
+          </Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
 function AssignmentRow({ item, onPress }) {
   const isCompleted = item.status === 'completed';
+  const label = dueDateLabel(item.dueDate);
   return (
     <Pressable
       style={[styles.card, isCompleted && styles.cardCompleted]}
@@ -94,13 +141,31 @@ function AssignmentRow({ item, onPress }) {
           {item.title}
         </Text>
         <Text style={styles.cardCourse}>{item.course}</Text>
-        <Text style={styles.cardDue}>Due {item.dueDate}</Text>
-        <ImportanceDots value={item.importance} />
+        <Text style={[styles.cardDue, label.urgent && !isCompleted && styles.cardDueUrgent]}>
+          {label.text}
+        </Text>
+        <ImportanceBar value={item.importance} />
       </View>
       <View style={[styles.badge, { backgroundColor: STATUS_COLORS[item.status] }]}>
         <Text style={styles.badgeText}>{STATUS_LABELS[item.status]}</Text>
       </View>
     </Pressable>
+  );
+}
+
+function EmptyState() {
+  return (
+    <View className="flex-1 items-center justify-center px-8 pt-16">
+      <Text className="text-5xl mb-4">📋</Text>
+      <Text className="text-lg font-bold text-center" style={{ color: '#1A1A2E' }}>
+        All clear!
+      </Text>
+      <Text className="text-sm text-center mt-1" style={{ color: '#888' }}>
+        No assignments yet. Tap the{' '}
+        <Text className="font-bold" style={{ color: '#3B5BDB' }}>+</Text>
+        {' '}button to add your first one.
+      </Text>
+    </View>
   );
 }
 
@@ -135,11 +200,10 @@ function AppScreen() {
   const [assignments, setAssignments] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
-  const [editingId, setEditingId] = useState(null); // null = add mode, id string = edit mode
+  const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [dueDateError, setDueDateError] = useState('');
 
-  // Load saved assignments on first launch; fall back to sample data for new installs
   useEffect(() => {
     (async () => {
       try {
@@ -163,7 +227,6 @@ function AppScreen() {
     })();
   }, []);
 
-  // Persist whenever the list changes (skip the initial empty state before loading)
   useEffect(() => {
     if (!loaded) return;
     AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(assignments)).catch(e =>
@@ -204,9 +267,7 @@ function AppScreen() {
       setDueDateError('Enter a valid date in YYYY-MM-DD format (e.g. 2026-06-01)');
       return;
     }
-
     if (editingId) {
-      // Update existing assignment
       setAssignments(prev =>
         prev.map(a =>
           a.id === editingId
@@ -222,7 +283,6 @@ function AppScreen() {
         )
       );
     } else {
-      // Add new assignment
       setAssignments(prev => [
         {
           id: Date.now().toString(),
@@ -235,7 +295,6 @@ function AppScreen() {
         ...prev,
       ]);
     }
-
     handleClose();
   }
 
@@ -257,7 +316,6 @@ function AppScreen() {
     );
   }
 
-  // Smart sort: incomplete sorted by due date asc, then importance desc; completed at bottom
   const incomplete = assignments.filter(a => a.status !== 'completed');
   const completed = assignments.filter(a => a.status === 'completed');
   const sortedIncomplete = [...incomplete].sort((a, b) => {
@@ -265,6 +323,9 @@ function AppScreen() {
     return b.importance - a.importance;
   });
   const sorted = [...sortedIncomplete, ...completed];
+
+  // Highest-priority incomplete assignment for "Work on next"
+  const workOnNext = sortedIncomplete[0] ?? null;
 
   if (!loaded) {
     return (
@@ -280,31 +341,26 @@ function AppScreen() {
     <View style={styles.container}>
       <StatusBar style="light" />
 
-      {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + 16 }]}>
         <Text style={styles.headerTitle}>Assignment Planner</Text>
         <Text style={styles.headerSub}>{incomplete.length} remaining</Text>
       </View>
 
-      {/* List */}
       <FlatList
         data={sorted}
         keyExtractor={item => item.id}
         renderItem={({ item }) => (
           <AssignmentRow item={item} onPress={() => openEditModal(item)} />
         )}
-        contentContainerStyle={styles.list}
-        ListEmptyComponent={
-          <Text style={styles.empty}>No assignments yet — tap + to add one.</Text>
-        }
+        ListHeaderComponent={workOnNext ? <WorkOnNextCard assignment={workOnNext} /> : null}
+        contentContainerStyle={[styles.list, sorted.length === 0 && styles.listEmpty]}
+        ListEmptyComponent={<EmptyState />}
       />
 
-      {/* Add button */}
       <Pressable style={[styles.fab, { bottom: insets.bottom + 16 }]} onPress={openAddModal}>
         <Text style={styles.fabText}>+</Text>
       </Pressable>
 
-      {/* Add / Edit modal */}
       <Modal
         visible={modalVisible}
         animationType="slide"
@@ -344,9 +400,7 @@ function AppScreen() {
                   if (dueDateError) setDueDateError('');
                 }}
               />
-              {dueDateError ? (
-                <Text style={styles.errorText}>{dueDateError}</Text>
-              ) : null}
+              {dueDateError ? <Text style={styles.errorText}>{dueDateError}</Text> : null}
 
               <Text style={styles.label}>Importance</Text>
               <View style={styles.importanceRow}>
@@ -372,7 +426,6 @@ function AppScreen() {
               </View>
               <Text style={styles.importanceHint}>{IMPORTANCE_HINTS[form.importance]}</Text>
 
-              {/* Status picker — only shown when editing */}
               {isEditing && (
                 <>
                   <Text style={styles.label}>Status</Text>
@@ -450,7 +503,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
 
-  // Header
   header: {
     backgroundColor: '#3B5BDB',
     paddingBottom: 20,
@@ -467,19 +519,15 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
 
-  // List
   list: {
-    padding: 16,
+    paddingTop: 16,
+    paddingHorizontal: 16,
     paddingBottom: 100,
   },
-  empty: {
-    textAlign: 'center',
-    color: '#888',
-    marginTop: 60,
-    fontSize: 15,
+  listEmpty: {
+    flex: 1,
   },
 
-  // Card
   card: {
     backgroundColor: '#FFFFFF',
     borderRadius: 12,
@@ -519,26 +567,11 @@ const styles = StyleSheet.create({
     color: '#888',
     marginTop: 4,
   },
-
-  // Importance dots (on card)
-  dotsRow: {
-    flexDirection: 'row',
-    marginTop: 6,
-    gap: 4,
-  },
-  dot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-  },
-  dotFilled: {
-    backgroundColor: '#3B5BDB',
-  },
-  dotEmpty: {
-    backgroundColor: '#DDE2FF',
+  cardDueUrgent: {
+    color: '#EF4444',
+    fontWeight: '600',
   },
 
-  // Status badge
   badge: {
     borderRadius: 20,
     paddingHorizontal: 10,
@@ -551,7 +584,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
-  // FAB
   fab: {
     position: 'absolute',
     right: 24,
@@ -573,7 +605,6 @@ const styles = StyleSheet.create({
     lineHeight: 34,
   },
 
-  // Modal
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.4)',
@@ -618,7 +649,6 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
 
-  // Importance picker
   importanceRow: {
     flexDirection: 'row',
     gap: 10,
@@ -652,7 +682,6 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
 
-  // Status picker
   statusRow: {
     flexDirection: 'row',
     gap: 8,
@@ -676,7 +705,6 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
 
-  // Action buttons
   saveButton: {
     backgroundColor: '#3B5BDB',
     borderRadius: 12,
