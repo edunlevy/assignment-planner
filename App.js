@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { differenceInCalendarDays, parseISO } from 'date-fns';
+import { addWeeks, differenceInCalendarDays, isAfter, parseISO } from 'date-fns';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
 import {
@@ -169,7 +169,10 @@ function EmptyState() {
   );
 }
 
-const EMPTY_FORM = { title: '', course: '', dueDate: '', importance: 3, status: 'not_started' };
+const EMPTY_FORM = {
+  title: '', course: '', dueDate: '', importance: 3, status: 'not_started',
+  repeatWeekly: false, repeatUntil: '',
+};
 
 function isValidDate(str) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(str)) return false;
@@ -202,7 +205,7 @@ function AppScreen() {
   const [modalVisible, setModalVisible] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
-  const [fieldErrors, setFieldErrors] = useState({ title: '', course: '', dueDate: '' });
+  const [fieldErrors, setFieldErrors] = useState({ title: '', course: '', dueDate: '', repeatUntil: '' });
 
   useEffect(() => {
     (async () => {
@@ -234,7 +237,7 @@ function AppScreen() {
     );
   }, [assignments, loaded]);
 
-  const EMPTY_ERRORS = { title: '', course: '', dueDate: '' };
+  const EMPTY_ERRORS = { title: '', course: '', dueDate: '', repeatUntil: '' };
 
   function openAddModal() {
     setEditingId(null);
@@ -264,7 +267,7 @@ function AppScreen() {
   }
 
   function handleSave() {
-    const errors = { title: '', course: '', dueDate: '' };
+    const errors = { title: '', course: '', dueDate: '', repeatUntil: '' };
     if (!form.title.trim()) errors.title = 'Title is required';
     if (!form.course.trim()) errors.course = 'Course is required';
     if (!form.dueDate.trim()) {
@@ -272,10 +275,20 @@ function AppScreen() {
     } else if (!isValidDate(form.dueDate.trim())) {
       errors.dueDate = 'Enter a valid date in YYYY-MM-DD format (e.g. 2026-06-01)';
     }
-    if (errors.title || errors.course || errors.dueDate) {
+    if (!editingId && form.repeatWeekly) {
+      if (!form.repeatUntil.trim()) {
+        errors.repeatUntil = 'End date is required when repeating';
+      } else if (!isValidDate(form.repeatUntil.trim())) {
+        errors.repeatUntil = 'Enter a valid date in YYYY-MM-DD format (e.g. 2026-08-01)';
+      } else if (!errors.dueDate && !isAfter(parseISO(form.repeatUntil.trim()), parseISO(form.dueDate.trim()))) {
+        errors.repeatUntil = 'End date must be after the first due date';
+      }
+    }
+    if (errors.title || errors.course || errors.dueDate || errors.repeatUntil) {
       setFieldErrors(errors);
       return;
     }
+
     if (editingId) {
       setAssignments(prev =>
         prev.map(a =>
@@ -291,6 +304,28 @@ function AppScreen() {
             : a
         )
       );
+    } else if (form.repeatWeekly) {
+      // Generate all weekly occurrences up front, capped at 52 (1 year)
+      const seriesId = Date.now().toString();
+      const until = parseISO(form.repeatUntil.trim());
+      const occurrences = [];
+      let current = parseISO(form.dueDate.trim());
+      let week = 0;
+      while (!isAfter(current, until) && week < 52) {
+        const dueDateStr = current.toISOString().slice(0, 10);
+        occurrences.push({
+          id: `${seriesId}-${week}`,
+          title: form.title.trim(),
+          course: form.course.trim(),
+          dueDate: dueDateStr,
+          importance: form.importance,
+          status: 'not_started',
+          seriesId,
+        });
+        current = addWeeks(current, 1);
+        week++;
+      }
+      setAssignments(prev => [...occurrences, ...prev]);
     } else {
       setAssignments(prev => [
         {
@@ -447,6 +482,38 @@ function AppScreen() {
                 ))}
               </View>
               <Text style={styles.importanceHint}>{IMPORTANCE_HINTS[form.importance]}</Text>
+
+              {/* Repeat weekly — only shown when adding, not editing */}
+              {!isEditing && (
+                <>
+                  <Pressable
+                    style={styles.repeatToggleRow}
+                    onPress={() => setForm(f => ({ ...f, repeatWeekly: !f.repeatWeekly, repeatUntil: '' }))}
+                  >
+                    <View style={[styles.checkbox, form.repeatWeekly && styles.checkboxChecked]}>
+                      {form.repeatWeekly && <Text style={styles.checkmark}>✓</Text>}
+                    </View>
+                    <Text style={styles.repeatToggleLabel}>Repeat weekly until…</Text>
+                  </Pressable>
+
+                  {form.repeatWeekly && (
+                    <>
+                      <TextInput
+                        style={[styles.input, fieldErrors.repeatUntil ? styles.inputError : null]}
+                        placeholder="End date YYYY-MM-DD"
+                        value={form.repeatUntil}
+                        onChangeText={t => {
+                          setForm(f => ({ ...f, repeatUntil: t }));
+                          if (fieldErrors.repeatUntil) setFieldErrors(e => ({ ...e, repeatUntil: '' }));
+                        }}
+                      />
+                      {fieldErrors.repeatUntil
+                        ? <Text style={styles.errorText}>{fieldErrors.repeatUntil}</Text>
+                        : null}
+                    </>
+                  )}
+                </>
+              )}
 
               {isEditing && (
                 <>
@@ -702,6 +769,39 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#888',
     marginTop: 6,
+  },
+
+  // Repeat toggle
+  repeatToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 20,
+    gap: 10,
+  },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 5,
+    borderWidth: 2,
+    borderColor: '#DDE2FF',
+    backgroundColor: '#F8F9FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxChecked: {
+    backgroundColor: '#3B5BDB',
+    borderColor: '#3B5BDB',
+  },
+  checkmark: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 16,
+  },
+  repeatToggleLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#1A1A2E',
   },
 
   statusRow: {
