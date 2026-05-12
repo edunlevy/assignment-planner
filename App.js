@@ -92,13 +92,26 @@ function AssignmentRow({ item }) {
 
 const EMPTY_FORM = { title: '', course: '', dueDate: '', importance: 3 };
 
+function isValidDate(str) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(str)) return false;
+  const [y, m, d] = str.split('-').map(Number);
+  if (m < 1 || m > 12 || d < 1 || d > 31) return false;
+  const date = new Date(y, m - 1, d);
+  return date.getFullYear() === y && date.getMonth() === m - 1 && date.getDate() === d;
+}
+
 export default function App() {
   const [assignments, setAssignments] = useState(SAMPLE_ASSIGNMENTS);
   const [modalVisible, setModalVisible] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
+  const [dueDateError, setDueDateError] = useState('');
 
   function handleAdd() {
     if (!form.title.trim() || !form.course.trim() || !form.dueDate.trim()) return;
+    if (!isValidDate(form.dueDate.trim())) {
+      setDueDateError('Enter a valid date in YYYY-MM-DD format (e.g. 2026-06-01)');
+      return;
+    }
     const newAssignment = {
       id: Date.now().toString(),
       title: form.title.trim(),
@@ -109,11 +122,13 @@ export default function App() {
     };
     setAssignments(prev => [newAssignment, ...prev]);
     setForm(EMPTY_FORM);
+    setDueDateError('');
     setModalVisible(false);
   }
 
   function handleClose() {
     setForm(EMPTY_FORM);
+    setDueDateError('');
     setModalVisible(false);
   }
 
@@ -177,11 +192,17 @@ export default function App() {
 
               <Text style={styles.label}>Due Date</Text>
               <TextInput
-                style={styles.input}
+                style={[styles.input, dueDateError ? styles.inputError : null]}
                 placeholder="YYYY-MM-DD"
                 value={form.dueDate}
-                onChangeText={t => setForm(f => ({ ...f, dueDate: t }))}
+                onChangeText={t => {
+                  setForm(f => ({ ...f, dueDate: t }));
+                  if (dueDateError) setDueDateError('');
+                }}
               />
+              {dueDateError ? (
+                <Text style={styles.errorText}>{dueDateError}</Text>
+              ) : null}
 
               <Text style={styles.label}>Importance</Text>
               <View style={styles.importanceRow}>
@@ -393,6 +414,15 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#1A1A2E',
     backgroundColor: '#F8F9FF',
+  },
+  inputError: {
+    borderColor: '#FF6B6B',
+    backgroundColor: '#FFF5F5',
+  },
+  errorText: {
+    color: '#FF6B6B',
+    fontSize: 12,
+    marginTop: 4,
   },
 
   // Importance picker (in form)
