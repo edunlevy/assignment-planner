@@ -2,6 +2,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { addWeeks, differenceInCalendarDays, format, isAfter, parseISO } from 'date-fns';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
+import { supabase } from './lib/supabase';
+import AuthScreen from './screens/AuthScreen';
 import {
   Alert,
   FlatList,
@@ -202,8 +204,22 @@ const STORAGE_KEY = 'assignments';
 
 function AppScreen() {
   const insets = useSafeAreaInsets();
+  const [session, setSession] = useState(null);
+  const [sessionLoaded, setSessionLoaded] = useState(false);
   const [assignments, setAssignments] = useState([]);
   const [loaded, setLoaded] = useState(false);
+
+  // Check for existing session and listen for auth changes
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session: s } }) => {
+      setSession(s);
+      setSessionLoaded(true);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
+      setSession(s);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
   const [modalVisible, setModalVisible] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -380,6 +396,21 @@ function AppScreen() {
       })[0]
     : null;
 
+  // Still checking for an existing session
+  if (!sessionLoaded) {
+    return (
+      <View style={styles.loadingContainer}>
+        <Text style={styles.loadingText}>Loading…</Text>
+      </View>
+    );
+  }
+
+  // Not logged in — show auth screen
+  if (!session) {
+    return <AuthScreen />;
+  }
+
+  // Assignments still loading from AsyncStorage
   if (!loaded) {
     return (
       <View style={styles.loadingContainer}>
@@ -395,8 +426,18 @@ function AppScreen() {
       <StatusBar style="light" />
 
       <View style={[styles.header, { paddingTop: insets.top + 16 }]}>
-        <Text style={styles.headerTitle}>Assignment Planner</Text>
-        <Text style={styles.headerSub}>{incomplete.length} remaining</Text>
+        <View style={styles.headerRow}>
+          <View>
+            <Text style={styles.headerTitle}>Assignment Planner</Text>
+            <Text style={styles.headerSub}>{incomplete.length} remaining</Text>
+          </View>
+          <Pressable
+            style={styles.signOutButton}
+            onPress={() => supabase.auth.signOut()}
+          >
+            <Text style={styles.signOutText}>Sign out</Text>
+          </Pressable>
+        </View>
       </View>
 
       <FlatList
@@ -600,6 +641,23 @@ const styles = StyleSheet.create({
     backgroundColor: '#3B5BDB',
     paddingBottom: 20,
     paddingHorizontal: 20,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  signOutButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.4)',
+  },
+  signOutText: {
+    color: '#BFC8FF',
+    fontSize: 13,
+    fontWeight: '600',
   },
   headerTitle: {
     fontSize: 26,
