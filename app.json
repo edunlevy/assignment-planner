@@ -27,6 +27,12 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "b8c50bf2-db4c-49b1-bbc5-9f8371903240"
+      }
+    },
+    "owner": "edunlevy"
   }
 }
