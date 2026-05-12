@@ -112,24 +112,29 @@ export default function App() {
 
   // Load saved assignments on first launch; fall back to sample data for new installs
   useEffect(() => {
-    AsyncStorage.getItem(STORAGE_KEY).then(json => {
-      if (json) {
-        try {
-          setAssignments(JSON.parse(json));
-        } catch {
+    (async () => {
+      try {
+        const json = await AsyncStorage.getItem(STORAGE_KEY);
+        if (json) {
+          const parsed = JSON.parse(json);
+          setAssignments(Array.isArray(parsed) ? parsed : SAMPLE_ASSIGNMENTS);
+        } else {
           setAssignments(SAMPLE_ASSIGNMENTS);
         }
-      } else {
+      } catch {
         setAssignments(SAMPLE_ASSIGNMENTS);
+      } finally {
+        setLoaded(true);
       }
-      setLoaded(true);
-    });
+    })();
   }, []);
 
   // Persist whenever the list changes (skip the initial empty state before loading)
   useEffect(() => {
     if (!loaded) return;
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(assignments));
+    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(assignments)).catch(e =>
+      console.warn('Failed to save assignments:', e)
+    );
   }, [assignments, loaded]);
 
   function handleAdd() {
