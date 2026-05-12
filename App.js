@@ -342,10 +342,9 @@ function AppScreen() {
     setSyncError('');
     try {
       if (editingId) {
-        // Cancel existing reminders before saving updated data
         const existing = assignments.find(a => a.id === editingId);
-        await cancelReminders(existing?.reminderIds);
 
+        // DB update first — only cancel old reminders if it succeeds
         const updated = await dbUpdate(editingId, session.user.id, {
           title: form.title.trim(),
           course: form.course.trim(),
@@ -353,6 +352,7 @@ function AppScreen() {
           importance: form.importance,
           status: form.status,
         });
+        await cancelReminders(existing?.reminderIds);
 
         // Only schedule new reminders if not completed
         const reminderIds = form.status !== 'completed'
