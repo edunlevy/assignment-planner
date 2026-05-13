@@ -8,10 +8,12 @@
       "distribution": "internal"
     },
     "preview": {
-      "distribution": "store",
-      "autoIncrement": true,
+      "distribution": "internal",
       "ios": {
         "buildConfiguration": "Release"
+      },
+      "android": {
+        "buildType": "apk"
       }
     },
     "production": {
@@ -23,13 +25,6 @@
     }
   },
   "submit": {
-    "preview": {
-      "ios": {
-        "appleId": "eadunlevy@gmail.com",
-        "ascAppId": "",
-        "appleTeamId": ""
-      }
-    },
     "production": {
       "ios": {
         "appleId": "eadunlevy@gmail.com",
