@@ -3,6 +3,7 @@ import { addWeeks, differenceInCalendarDays, format, isAfter, parseISO } from 'd
 import * as Linking from 'expo-linking';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
+import DueDateField from './components/DueDateField';
 import { dbDelete, dbFetch, dbInsert, dbInsertMany, dbUpdate } from './lib/assignmentsDb';
 import { cancelReminders, loadReminderMap, mergeReminderIds, requestNotificationPermission, saveReminderMap, scheduleReminders } from './lib/notifications';
 import { supabase } from './lib/supabase';
@@ -605,12 +606,11 @@ function AppScreen() {
               {fieldErrors.course ? <Text style={styles.errorText}>{fieldErrors.course}</Text> : null}
 
               <Text style={styles.label}>Due Date</Text>
-              <TextInput
-                style={[styles.input, fieldErrors.dueDate ? styles.inputError : null]}
-                placeholder="YYYY-MM-DD"
+              <DueDateField
                 value={form.dueDate}
-                onChangeText={t => {
-                  setForm(f => ({ ...f, dueDate: t }));
+                hasError={!!fieldErrors.dueDate}
+                onChange={iso => {
+                  setForm(f => ({ ...f, dueDate: iso }));
                   if (fieldErrors.dueDate) setFieldErrors(e => ({ ...e, dueDate: '' }));
                 }}
               />
@@ -655,12 +655,14 @@ function AppScreen() {
 
                   {form.repeatWeekly && (
                     <>
-                      <TextInput
-                        style={[styles.input, fieldErrors.repeatUntil ? styles.inputError : null]}
-                        placeholder="End date YYYY-MM-DD"
+                      <Text style={styles.label}>Repeat until</Text>
+                      <DueDateField
                         value={form.repeatUntil}
-                        onChangeText={t => {
-                          setForm(f => ({ ...f, repeatUntil: t }));
+                        hasError={!!fieldErrors.repeatUntil}
+                        placeholder="Tap to choose an end date"
+                        minimumDate={isValidDate(form.dueDate) ? parseISO(form.dueDate) : undefined}
+                        onChange={iso => {
+                          setForm(f => ({ ...f, repeatUntil: iso }));
                           if (fieldErrors.repeatUntil) setFieldErrors(e => ({ ...e, repeatUntil: '' }));
                         }}
                       />

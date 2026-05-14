@@ -34,6 +34,9 @@
         "projectId": "b8c50bf2-db4c-49b1-bbc5-9f8371903240"
       }
     },
-    "owner": "edunlevy"
+    "owner": "edunlevy",
+    "plugins": [
+      "@react-native-community/datetimepicker"
+    ]
   }
 }
