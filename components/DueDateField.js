@@ -1,7 +1,7 @@
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { format, parseISO } from 'date-fns';
 import { useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 function parseStoredDate(value) {
   if (!value) return null;
@@ -22,6 +22,18 @@ export default function DueDateField({
   minimumDate,
 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
+
+  if (Platform.OS === 'web') {
+    return (
+      <TextInput
+        style={[styles.webInput, hasError ? styles.fieldError : null]}
+        placeholder="YYYY-MM-DD"
+        value={value}
+        onChangeText={onChange}
+      />
+    );
+  }
+
   const parsedValue = parseStoredDate(value);
   const displayText = parsedValue
     ? format(parsedValue, 'EEE, MMM d, yyyy')
@@ -84,6 +96,15 @@ export default function DueDateField({
 }
 
 const styles = StyleSheet.create({
+  webInput: {
+    borderWidth: 1,
+    borderColor: '#DDE2FF',
+    borderRadius: 10,
+    padding: 12,
+    fontSize: 15,
+    color: '#1A1A2E',
+    backgroundColor: '#F8F9FF',
+  },
   field: {
     borderWidth: 1,
     borderColor: '#DDE2FF',
