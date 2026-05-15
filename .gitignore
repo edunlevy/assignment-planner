@@ -42,3 +42,6 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Local Claude Code workflow docs (skills, settings)
+.claude/
