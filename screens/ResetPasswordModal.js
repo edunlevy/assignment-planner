@@ -20,6 +20,23 @@ export default function ResetPasswordModal({ visible, onDone }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  // Bail out of the recovery flow without setting a new password.
+  // We sign out so the temporary recovery session doesn't leave the user
+  // logged in as the account that requested the reset.
+  async function handleCancel() {
+    if (loading) return;
+    setLoading(true);
+    try {
+      await supabase.auth.signOut();
+    } finally {
+      setPassword('');
+      setConfirm('');
+      setError('');
+      setLoading(false);
+      onDone();
+    }
+  }
+
   async function handleSave() {
     setError('');
     if (password.length < 8) { setError('Password must be at least 8 characters'); return; }
@@ -41,7 +58,7 @@ export default function ResetPasswordModal({ visible, onDone }) {
   }
 
   return (
-    <Modal visible={visible} animationType="fade" transparent onRequestClose={() => {}}>
+    <Modal visible={visible} animationType="fade" transparent onRequestClose={handleCancel}>
       <KeyboardAvoidingView
         style={styles.overlay}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -81,6 +98,14 @@ export default function ResetPasswordModal({ visible, onDone }) {
               ? <ActivityIndicator color="#fff" />
               : <Text style={styles.buttonText}>Save Password</Text>
             }
+          </Pressable>
+
+          <Pressable
+            style={styles.cancelButton}
+            onPress={handleCancel}
+            disabled={loading}
+          >
+            <Text style={styles.cancelText}>Cancel</Text>
           </Pressable>
         </View>
       </KeyboardAvoidingView>
@@ -152,5 +177,14 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '700',
     fontSize: 16,
+  },
+  cancelButton: {
+    alignItems: 'center',
+    marginTop: 12,
+    padding: 8,
+  },
+  cancelText: {
+    color: '#888',
+    fontSize: 15,
   },
 });

@@ -77,3 +77,19 @@ alter table public.assignments
 
 Without this, reminders still fire on the device but cannot be
 programmatically canceled after a fresh login or on a second device.
+
+---
+
+## Recommended index for scale
+
+`dbFetch` filters by `user_id` and orders by `due_date`. Once any single user has
+more than a few hundred rows (or the table accumulates many users), add a
+composite index so the order-by doesn't require a sort:
+
+```sql
+create index if not exists assignments_user_due_idx
+  on public.assignments (user_id, due_date);
+```
+
+Run this in the Supabase SQL editor. RLS still applies; the index just makes the
+already-filtered scan an index scan instead of a heap + sort.
