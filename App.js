@@ -1,50 +1,25 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { addWeeks, differenceInCalendarDays, format, isAfter, parseISO } from 'date-fns';
+import { differenceInCalendarDays, parseISO } from 'date-fns';
 import * as Linking from 'expo-linking';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useState } from 'react';
-import DueDateField from './components/DueDateField';
-import { dbDelete, dbFetch, dbInsert, dbInsertMany, dbUpdate } from './lib/assignmentsDb';
-import { cancelReminders, loadReminderMap, mergeReminderIds, requestNotificationPermission, saveReminderMap, scheduleReminders } from './lib/notifications';
-import { supabase } from './lib/supabase';
-import AuthScreen from './screens/AuthScreen';
-import ProfileModal from './screens/ProfileModal';
-import ResetPasswordModal from './screens/ResetPasswordModal';
+import { useEffect, useMemo, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
   FlatList,
-  Modal,
-  Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-
-const STATUS_LABELS = {
-  not_started: 'Not Started',
-  in_progress: 'In Progress',
-  completed: 'Completed',
-};
-
-const STATUS_COLORS = {
-  not_started: '#FF6B6B',
-  in_progress: '#FFB347',
-  completed: '#6BCB77',
-};
-
-const IMPORTANCE_HINTS = {
-  1: 'Low priority',
-  2: 'Minor',
-  3: 'Normal',
-  4: 'Important',
-  5: 'Critical — do this first!',
-};
+import AssignmentFormModal, { STATUS_COLORS, STATUS_LABELS } from './components/AssignmentFormModal';
+import { useAssignments } from './hooks/useAssignments';
+import { parseAuthRedirect } from './lib/deepLink';
+import { requestNotificationPermission } from './lib/notifications';
+import { buildWeeklySeries } from './lib/recurring';
+import { supabase } from './lib/supabase';
+import AuthScreen from './screens/AuthScreen';
+import ProfileModal from './screens/ProfileModal';
+import ResetPasswordModal from './screens/ResetPasswordModal';
 
 // Importance bar: 5 filled segments, color shifts from light to deep blue
 const IMPORTANCE_SEGMENT_COLORS = ['#BFC8FF', '#91A7FF', '#5C7CFA', '#3B5BDB', '#1E3A8A'];
@@ -145,53 +120,30 @@ function EmptyState() {
   );
 }
 
-const EMPTY_FORM = {
-  title: '', course: '', dueDate: '', importance: 3, status: 'not_started',
-  repeatWeekly: false, repeatUntil: '',
-};
-
-function isValidDate(str) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(str)) return false;
-  const [y, m, d] = str.split('-').map(Number);
-  if (m < 1 || m > 12 || d < 1 || d > 31) return false;
-  const date = new Date(y, m - 1, d);
-  return date.getFullYear() === y && date.getMonth() === m - 1 && date.getDate() === d;
-}
-
-const VALID_STATUSES = new Set(['not_started', 'in_progress', 'completed']);
-
-function sanitizeAssignment(a) {
-  if (!a || typeof a !== 'object') return null;
-  if (!a.id || !a.title || !a.course || !a.dueDate) return null;
-  if (!isValidDate(a.dueDate)) return null;
-  return {
-    ...a,
-    importance: (Number.isInteger(a.importance) && a.importance >= 1 && a.importance <= 5)
-      ? a.importance
-      : 3,
-    status: VALID_STATUSES.has(a.status) ? a.status : 'not_started',
-    reminderIds: Array.isArray(a.reminderIds) ? a.reminderIds : [],
-  };
-}
-
-function storageKey(userId) {
-  return `assignments_${userId}`;
-}
-
+// Top-level session bootstrap + assignment list view.
+// All assignment lifecycle logic lives in useAssignments; the form lives in AssignmentFormModal.
 function AppScreen() {
   const insets = useSafeAreaInsets();
   const [session, setSession] = useState(null);
   const [sessionLoaded, setSessionLoaded] = useState(false);
-  const [assignments, setAssignments] = useState([]);
-  const [loaded, setLoaded] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [syncError, setSyncError] = useState('');
   const [profileVisible, setProfileVisible] = useState(false);
   const [recoveryMode, setRecoveryMode] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [editingId, setEditingId] = useState(null);
-  const [form, setForm] = useState(EMPTY_FORM);
-  const [fieldErrors, setFieldErrors] = useState({ title: '', course: '', dueDate: '', repeatUntil: '' });
+  const [saving, setSaving] = useState(false);
+
+  const userId = session?.user?.id ?? null;
+  const {
+    assignments,
+    loaded,
+    syncError,
+    clearSyncError,
+    reportSyncError,
+    insert,
+    insertMany,
+    update,
+    remove,
+  } = useAssignments(userId);
 
   // Check for existing session and listen for auth changes
   useEffect(() => {
@@ -201,26 +153,18 @@ function AppScreen() {
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
       setSession(s);
-      if (!s) {
-        setAssignments([]);
-        setLoaded(false);
-        setRecoveryMode(false);
-      }
+      if (!s) setRecoveryMode(false);
     });
     return () => subscription.unsubscribe();
   }, []);
 
-  // Handle password-reset deep links (assignmentplanner://reset-password#access_token=...&type=recovery)
-  // With detectSessionInUrl:false we parse the URL ourselves. setSession emits SIGNED_IN (not
-  // PASSWORD_RECOVERY), so we set recoveryMode directly on success instead of waiting for the event.
+  // Handle password-reset deep links
+  // (assignmentplanner://reset-password#access_token=...&type=recovery).
+  // With detectSessionInUrl:false we parse the URL ourselves. setSession emits SIGNED_IN
+  // (not PASSWORD_RECOVERY), so we set recoveryMode directly on success.
   useEffect(() => {
     async function handleDeepLink(url) {
-      if (!url) return;
-      const fragment = url.includes('#') ? url.split('#')[1] : '';
-      if (!fragment) return;
-      const params = Object.fromEntries(
-        fragment.split('&').map(pair => pair.split('=').map(decodeURIComponent))
-      );
+      const params = parseAuthRedirect(url);
       if (params.type === 'recovery' && params.access_token) {
         const { error } = await supabase.auth.setSession({
           access_token: params.access_token,
@@ -229,281 +173,102 @@ function AppScreen() {
         if (!error) setRecoveryMode(true);
       }
     }
-
-    // Cold start: app was launched by tapping the link
     Linking.getInitialURL().then(handleDeepLink);
-    // Warm start: app was already open when the link was tapped
     const sub = Linking.addEventListener('url', ({ url }) => handleDeepLink(url));
     return () => sub.remove();
   }, []);
 
   // Request notification permission once when the user is logged in
   useEffect(() => {
-    if (session) requestNotificationPermission();
-  }, [!!session]);
-
-  // Load assignments: Supabase (source of truth) with AsyncStorage as offline fallback
-  useEffect(() => {
-    if (!session) return;
-    const userId = session.user.id;
-    let cancelled = false;
-    setLoaded(false);
-    setSyncError('');
-    (async () => {
-      // Show cached data immediately while Supabase loads.
-      // Isolated try so a corrupt cache never blocks the network fetch.
-      try {
-        const cached = await AsyncStorage.getItem(storageKey(userId));
-        if (!cancelled && cached) {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed)) {
-            setAssignments(parsed.map(sanitizeAssignment).filter(Boolean));
-          }
-        }
-      } catch {
-        // Cache unreadable — proceed to Supabase fetch regardless
-      }
-
-      // Always attempt to fetch fresh data from Supabase
-      try {
-        const [fresh, reminderMap] = await Promise.all([
-          dbFetch(userId),
-          loadReminderMap(userId),
-        ]);
-        if (!cancelled) {
-          const merged = mergeReminderIds(fresh, reminderMap);
-
-          // Reschedule reminders for incomplete assignments that have none
-          // (covers the case where reminders were cleared on sign-out).
-          const updatedMap = { ...reminderMap };
-          const withReminders = await Promise.all(
-            merged.map(async a => {
-              if (a.status === 'completed' || a.reminderIds.length > 0) return a;
-              const ids = await scheduleReminders(a);
-              if (ids.length > 0) updatedMap[a.id] = ids;
-              return { ...a, reminderIds: ids };
-            })
-          );
-          if (!cancelled) {
-            if (Object.keys(updatedMap).length !== Object.keys(reminderMap).length ||
-                Object.keys(updatedMap).some(k => updatedMap[k] !== reminderMap[k])) {
-              saveReminderMap(userId, updatedMap);
-            }
-            setAssignments(withReminders);
-            AsyncStorage.setItem(storageKey(userId), JSON.stringify(withReminders)).catch(() => {});
-          }
-        }
-      } catch {
-        if (!cancelled) {
-          setSyncError('Could not reach the server. Showing cached data.');
-        }
-      } finally {
-        if (!cancelled) setLoaded(true);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [session?.user?.id]);
-
-  const EMPTY_ERRORS = { title: '', course: '', dueDate: '', repeatUntil: '' };
+    if (userId) requestNotificationPermission();
+  }, [userId]);
 
   function openAddModal() {
     setEditingId(null);
-    setForm(EMPTY_FORM);
-    setFieldErrors(EMPTY_ERRORS);
     setModalVisible(true);
   }
 
   function openEditModal(item) {
     setEditingId(item.id);
-    setForm({
-      title: item.title,
-      course: item.course,
-      dueDate: item.dueDate,
-      importance: item.importance,
-      status: item.status,
-    });
-    setFieldErrors(EMPTY_ERRORS);
     setModalVisible(true);
   }
 
   function handleClose() {
-    setForm(EMPTY_FORM);
-    setFieldErrors(EMPTY_ERRORS);
     setEditingId(null);
     setModalVisible(false);
   }
 
-  async function handleSave() {
-    const errors = { title: '', course: '', dueDate: '', repeatUntil: '' };
-    if (!form.title.trim()) errors.title = 'Title is required';
-    if (!form.course.trim()) errors.course = 'Course is required';
-    if (!form.dueDate.trim()) {
-      errors.dueDate = 'Due date is required';
-    } else if (!isValidDate(form.dueDate.trim())) {
-      errors.dueDate = 'Enter a valid date in YYYY-MM-DD format (e.g. 2026-06-01)';
-    }
-    if (!editingId && form.repeatWeekly) {
-      if (!form.repeatUntil.trim()) {
-        errors.repeatUntil = 'End date is required when repeating';
-      } else if (!isValidDate(form.repeatUntil.trim())) {
-        errors.repeatUntil = 'Enter a valid date in YYYY-MM-DD format (e.g. 2026-08-01)';
-      } else if (!errors.dueDate && !isAfter(parseISO(form.repeatUntil.trim()), parseISO(form.dueDate.trim()))) {
-        errors.repeatUntil = 'End date must be after the first due date';
-      }
-    }
-    if (errors.title || errors.course || errors.dueDate || errors.repeatUntil) {
-      setFieldErrors(errors);
-      return;
-    }
-
+  // Wrap a mutation with the saving spinner + uniform error banner handling.
+  async function runMutation(fn) {
     setSaving(true);
-    setSyncError('');
+    clearSyncError();
     try {
-      if (editingId) {
-        const existing = assignments.find(a => a.id === editingId);
-
-        // DB update first — only cancel old reminders if it succeeds
-        const updated = await dbUpdate(editingId, session.user.id, {
-          title: form.title.trim(),
-          course: form.course.trim(),
-          dueDate: form.dueDate.trim(),
-          importance: form.importance,
-          status: form.status,
-        });
-        await cancelReminders(existing?.reminderIds);
-
-        // Only schedule new reminders if not completed
-        const reminderIds = form.status !== 'completed'
-          ? await scheduleReminders(updated)
-          : [];
-
-        // Persist the updated reminder map so IDs survive a Supabase re-fetch
-        const reminderMap = await loadReminderMap(session.user.id);
-        reminderMap[editingId] = reminderIds;
-        saveReminderMap(session.user.id, reminderMap);
-
-        const finalAssignment = { ...updated, reminderIds };
-        setAssignments(prev => {
-          const next = prev.map(a => a.id === editingId ? finalAssignment : a);
-          AsyncStorage.setItem(storageKey(session.user.id), JSON.stringify(next)).catch(() => {});
-          return next;
-        });
-      } else if (form.repeatWeekly) {
-        const seriesId = Date.now().toString();
-        const until = parseISO(form.repeatUntil.trim());
-        const drafts = [];
-        let current = parseISO(form.dueDate.trim());
-        let week = 0;
-        while (!isAfter(current, until) && week < 52) {
-          drafts.push({
-            title: form.title.trim(),
-            course: form.course.trim(),
-            dueDate: format(current, 'yyyy-MM-dd'),
-            importance: form.importance,
-            status: 'not_started',
-            seriesId,
-          });
-          current = addWeeks(current, 1);
-          week++;
-        }
-        const saved = await dbInsertMany(drafts, session.user.id);
-        // Schedule reminders for each occurrence
-        const savedWithReminders = await Promise.all(
-          saved.map(async a => ({ ...a, reminderIds: await scheduleReminders(a) }))
-        );
-        // Persist the reminder map for each new occurrence
-        const reminderMap = await loadReminderMap(session.user.id);
-        for (const a of savedWithReminders) reminderMap[a.id] = a.reminderIds;
-        saveReminderMap(session.user.id, reminderMap);
-        setAssignments(prev => {
-          const next = [...savedWithReminders, ...prev];
-          AsyncStorage.setItem(storageKey(session.user.id), JSON.stringify(next)).catch(() => {});
-          return next;
-        });
-      } else {
-        const saved = await dbInsert({
-          title: form.title.trim(),
-          course: form.course.trim(),
-          dueDate: form.dueDate.trim(),
-          importance: form.importance,
-          status: 'not_started',
-        }, session.user.id);
-        const reminderIds = await scheduleReminders(saved);
-        // Persist reminder IDs so they survive a Supabase re-fetch
-        const reminderMap = await loadReminderMap(session.user.id);
-        reminderMap[saved.id] = reminderIds;
-        saveReminderMap(session.user.id, reminderMap);
-        const savedWithReminders = { ...saved, reminderIds };
-        setAssignments(prev => {
-          const next = [savedWithReminders, ...prev];
-          AsyncStorage.setItem(storageKey(session.user.id), JSON.stringify(next)).catch(() => {});
-          return next;
-        });
-      }
+      await fn();
       handleClose();
-    } catch (e) {
-      setSyncError('Could not save. Check your connection and try again.');
+    } catch {
+      reportSyncError('Could not save. Check your connection and try again.');
     } finally {
       setSaving(false);
     }
   }
 
-  function handleDelete() {
-    const doDelete = async () => {
-      setSaving(true);
-      setSyncError('');
-      try {
-        const deletingAssignment = assignments.find(a => a.id === editingId);
-        await dbDelete(editingId, session.user.id);
-        await cancelReminders(deletingAssignment?.reminderIds);
-        // Remove from the reminder map so IDs don't linger
-        const reminderMap = await loadReminderMap(session.user.id);
-        delete reminderMap[editingId];
-        saveReminderMap(session.user.id, reminderMap);
-        setAssignments(prev => {
-          const next = prev.filter(a => a.id !== editingId);
-          AsyncStorage.setItem(storageKey(session.user.id), JSON.stringify(next)).catch(() => {});
-          return next;
-        });
-        handleClose();
-      } catch {
-        setSyncError('Could not delete. Check your connection and try again.');
-      } finally {
-        setSaving(false);
-      }
-    };
-    if (Platform.OS === 'web') {
-      // eslint-disable-next-line no-alert
-      if (window.confirm(`Delete "${form.title}"?`)) doDelete();
-    } else {
-      Alert.alert(
-        'Delete Assignment',
-        `Delete "${form.title}"?`,
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Delete', style: 'destructive', onPress: doDelete },
-        ]
-      );
-    }
+  function handleCreate(values) {
+    return runMutation(() => insert(values));
   }
 
-  const incomplete = assignments.filter(a => a.status !== 'completed');
-  const completed = assignments.filter(a => a.status === 'completed');
-  const sortedIncomplete = [...incomplete].sort((a, b) => {
-    if (a.dueDate !== b.dueDate) return a.dueDate.localeCompare(b.dueDate);
-    return b.importance - a.importance;
-  });
-  const sorted = [...sortedIncomplete, ...completed];
+  function handleCreateRecurring(values) {
+    return runMutation(() => {
+      const drafts = buildWeeklySeries({
+        startISO: values.dueDate,
+        untilISO: values.repeatUntil,
+        base: {
+          title: values.title,
+          course: values.course,
+          importance: values.importance,
+          status: 'not_started',
+        },
+        seriesId: Date.now().toString(),
+      });
+      return insertMany(drafts);
+    });
+  }
 
-  // Highest-priority incomplete assignment: importance desc, then due date asc
-  const workOnNext = incomplete.length > 0
-    ? [...incomplete].sort((a, b) => {
-        if (b.importance !== a.importance) return b.importance - a.importance;
-        return a.dueDate.localeCompare(b.dueDate);
-      })[0]
-    : null;
+  function handleUpdate(id, changes) {
+    return runMutation(() => update(id, changes));
+  }
 
-  // Still checking for an existing session
+  function handleDelete(id) {
+    setSaving(true);
+    clearSyncError();
+    remove(id)
+      .then(() => handleClose())
+      .catch(() => reportSyncError('Could not delete. Check your connection and try again.'))
+      .finally(() => setSaving(false));
+  }
+
+  // Sorted/filtered views — memoized so they don't recompute on unrelated re-renders.
+  const { sorted, workOnNext, incompleteCount } = useMemo(() => {
+    const incomplete = assignments.filter(a => a.status !== 'completed');
+    const completed = assignments.filter(a => a.status === 'completed');
+    const sortedIncomplete = [...incomplete].sort((a, b) => {
+      if (a.dueDate !== b.dueDate) return a.dueDate.localeCompare(b.dueDate);
+      return b.importance - a.importance;
+    });
+    const next = incomplete.length > 0
+      ? [...incomplete].sort((a, b) => {
+          if (b.importance !== a.importance) return b.importance - a.importance;
+          return a.dueDate.localeCompare(b.dueDate);
+        })[0]
+      : null;
+    return {
+      sorted: [...sortedIncomplete, ...completed],
+      workOnNext: next,
+      incompleteCount: incomplete.length,
+    };
+  }, [assignments]);
+
+  const editing = editingId ? assignments.find(a => a.id === editingId) ?? null : null;
+
   if (!sessionLoaded) {
     return (
       <View style={styles.loadingContainer}>
@@ -511,13 +276,7 @@ function AppScreen() {
       </View>
     );
   }
-
-  // Not logged in — show auth screen
-  if (!session) {
-    return <AuthScreen />;
-  }
-
-  // Assignments still loading from AsyncStorage
+  if (!session) return <AuthScreen />;
   if (!loaded) {
     return (
       <View style={styles.loadingContainer}>
@@ -525,8 +284,6 @@ function AppScreen() {
       </View>
     );
   }
-
-  const isEditing = editingId !== null;
 
   return (
     <View style={styles.container}>
@@ -536,7 +293,7 @@ function AppScreen() {
         <View style={styles.headerRow}>
           <View>
             <Text style={styles.headerTitle}>Assignment Planner</Text>
-            <Text style={styles.headerSub}>{incomplete.length} remaining</Text>
+            <Text style={styles.headerSub}>{incompleteCount} remaining</Text>
           </View>
           <Pressable
             style={styles.profileButton}
@@ -548,7 +305,7 @@ function AppScreen() {
       </View>
 
       {syncError ? (
-        <Pressable style={styles.syncErrorBanner} onPress={() => setSyncError('')}>
+        <Pressable style={styles.syncErrorBanner} onPress={clearSyncError}>
           <Text style={styles.syncErrorText}>{syncError}  ✕</Text>
         </Pressable>
       ) : null}
@@ -568,172 +325,16 @@ function AppScreen() {
         <Text style={styles.fabText}>+</Text>
       </Pressable>
 
-      <Modal
+      <AssignmentFormModal
         visible={modalVisible}
-        animationType="slide"
-        transparent
-        onRequestClose={handleClose}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalSheet, { paddingBottom: insets.bottom + 24 }]}>
-            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-              <Text style={styles.modalTitle}>
-                {isEditing ? 'Edit Assignment' : 'New Assignment'}
-              </Text>
-
-              <Text style={styles.label}>Title</Text>
-              <TextInput
-                style={[styles.input, fieldErrors.title ? styles.inputError : null]}
-                placeholder="e.g. Problem Set 4"
-                value={form.title}
-                onChangeText={t => {
-                  setForm(f => ({ ...f, title: t }));
-                  if (fieldErrors.title) setFieldErrors(e => ({ ...e, title: '' }));
-                }}
-              />
-              {fieldErrors.title ? <Text style={styles.errorText}>{fieldErrors.title}</Text> : null}
-
-              <Text style={styles.label}>Course</Text>
-              <TextInput
-                style={[styles.input, fieldErrors.course ? styles.inputError : null]}
-                placeholder="e.g. MATH 201"
-                value={form.course}
-                onChangeText={t => {
-                  setForm(f => ({ ...f, course: t }));
-                  if (fieldErrors.course) setFieldErrors(e => ({ ...e, course: '' }));
-                }}
-              />
-              {fieldErrors.course ? <Text style={styles.errorText}>{fieldErrors.course}</Text> : null}
-
-              <Text style={styles.label}>Due Date</Text>
-              <DueDateField
-                value={form.dueDate}
-                hasError={!!fieldErrors.dueDate}
-                onChange={iso => {
-                  setForm(f => ({ ...f, dueDate: iso }));
-                  if (fieldErrors.dueDate) setFieldErrors(e => ({ ...e, dueDate: '' }));
-                }}
-              />
-              {fieldErrors.dueDate ? <Text style={styles.errorText}>{fieldErrors.dueDate}</Text> : null}
-
-              <Text style={styles.label}>Importance</Text>
-              <View style={styles.importanceRow}>
-                {[1, 2, 3, 4, 5].map(n => (
-                  <Pressable
-                    key={n}
-                    style={[
-                      styles.importanceButton,
-                      form.importance === n && styles.importanceButtonSelected,
-                    ]}
-                    onPress={() => setForm(f => ({ ...f, importance: n }))}
-                  >
-                    <Text
-                      style={[
-                        styles.importanceButtonText,
-                        form.importance === n && styles.importanceButtonTextSelected,
-                      ]}
-                    >
-                      {n}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-              <Text style={styles.importanceHint}>{IMPORTANCE_HINTS[form.importance]}</Text>
-
-              {/* Repeat weekly — only shown when adding, not editing */}
-              {!isEditing && (
-                <>
-                  <Pressable
-                    style={styles.repeatToggleRow}
-                    onPress={() => setForm(f => ({ ...f, repeatWeekly: !f.repeatWeekly, repeatUntil: '' }))}
-                  >
-                    <View style={[styles.checkbox, form.repeatWeekly && styles.checkboxChecked]}>
-                      {form.repeatWeekly && <Text style={styles.checkmark}>✓</Text>}
-                    </View>
-                    <Text style={styles.repeatToggleLabel}>Repeat weekly until…</Text>
-                  </Pressable>
-
-                  {form.repeatWeekly && (
-                    <>
-                      <Text style={styles.label}>Repeat until</Text>
-                      <DueDateField
-                        value={form.repeatUntil}
-                        hasError={!!fieldErrors.repeatUntil}
-                        placeholder="Tap to choose an end date"
-                        minimumDate={isValidDate(form.dueDate) ? parseISO(form.dueDate) : undefined}
-                        onChange={iso => {
-                          setForm(f => ({ ...f, repeatUntil: iso }));
-                          if (fieldErrors.repeatUntil) setFieldErrors(e => ({ ...e, repeatUntil: '' }));
-                        }}
-                      />
-                      {fieldErrors.repeatUntil
-                        ? <Text style={styles.errorText}>{fieldErrors.repeatUntil}</Text>
-                        : null}
-                    </>
-                  )}
-                </>
-              )}
-
-              {isEditing && (
-                <>
-                  <Text style={styles.label}>Status</Text>
-                  <View style={styles.statusRow}>
-                    {Object.entries(STATUS_LABELS).map(([key, label]) => (
-                      <Pressable
-                        key={key}
-                        style={[
-                          styles.statusButton,
-                          form.status === key && {
-                            backgroundColor: STATUS_COLORS[key],
-                            borderColor: STATUS_COLORS[key],
-                          },
-                        ]}
-                        onPress={() => setForm(f => ({ ...f, status: key }))}
-                      >
-                        <Text
-                          style={[
-                            styles.statusButtonText,
-                            form.status === key && styles.statusButtonTextSelected,
-                          ]}
-                        >
-                          {label}
-                        </Text>
-                      </Pressable>
-                    ))}
-                  </View>
-                </>
-              )}
-
-              <Pressable
-                style={[styles.saveButton, saving && { opacity: 0.6 }]}
-                onPress={handleSave}
-                disabled={saving}
-              >
-                {saving
-                  ? <ActivityIndicator color="#fff" />
-                  : <Text style={styles.saveButtonText}>
-                      {isEditing ? 'Save Changes' : 'Save Assignment'}
-                    </Text>
-                }
-              </Pressable>
-
-              {isEditing && (
-                <Pressable
-                  style={[styles.deleteButton, saving && { opacity: 0.4 }]}
-                  onPress={handleDelete}
-                  disabled={saving}
-                >
-                  <Text style={styles.deleteButtonText}>Delete Assignment</Text>
-                </Pressable>
-              )}
-
-              <Pressable style={styles.cancelButton} onPress={handleClose} disabled={saving}>
-                <Text style={styles.cancelButtonText}>Cancel</Text>
-              </Pressable>
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
+        editing={editing}
+        saving={saving}
+        onClose={handleClose}
+        onCreate={handleCreate}
+        onCreateRecurring={handleCreateRecurring}
+        onUpdate={handleUpdate}
+        onDelete={handleDelete}
+      />
 
       <ProfileModal
         visible={profileVisible}
@@ -893,175 +494,6 @@ const styles = StyleSheet.create({
     lineHeight: 34,
   },
 
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'flex-end',
-  },
-  modalSheet: {
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 24,
-    maxHeight: '90%',
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#1A1A2E',
-    marginBottom: 20,
-  },
-  label: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#555',
-    marginBottom: 6,
-    marginTop: 12,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: '#DDE2FF',
-    borderRadius: 10,
-    padding: 12,
-    fontSize: 15,
-    color: '#1A1A2E',
-    backgroundColor: '#F8F9FF',
-  },
-  inputError: {
-    borderColor: '#FF6B6B',
-    backgroundColor: '#FFF5F5',
-  },
-  errorText: {
-    color: '#FF6B6B',
-    fontSize: 12,
-    marginTop: 4,
-  },
-
-  importanceRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 4,
-  },
-  importanceButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    borderWidth: 2,
-    borderColor: '#DDE2FF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#F8F9FF',
-  },
-  importanceButtonSelected: {
-    backgroundColor: '#3B5BDB',
-    borderColor: '#3B5BDB',
-  },
-  importanceButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#3B5BDB',
-  },
-  importanceButtonTextSelected: {
-    color: '#FFFFFF',
-  },
-  importanceHint: {
-    fontSize: 12,
-    color: '#888',
-    marginTop: 6,
-  },
-
-  // Repeat toggle
-  repeatToggleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 20,
-    gap: 10,
-  },
-  checkbox: {
-    width: 22,
-    height: 22,
-    borderRadius: 5,
-    borderWidth: 2,
-    borderColor: '#DDE2FF',
-    backgroundColor: '#F8F9FF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  checkboxChecked: {
-    backgroundColor: '#3B5BDB',
-    borderColor: '#3B5BDB',
-  },
-  checkmark: {
-    color: '#FFFFFF',
-    fontSize: 13,
-    fontWeight: '700',
-    lineHeight: 16,
-  },
-  repeatToggleLabel: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#1A1A2E',
-  },
-
-  statusRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 4,
-    flexWrap: 'wrap',
-  },
-  statusButton: {
-    borderRadius: 20,
-    borderWidth: 2,
-    borderColor: '#DDE2FF',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    backgroundColor: '#F8F9FF',
-  },
-  statusButtonText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#555',
-  },
-  statusButtonTextSelected: {
-    color: '#FFFFFF',
-  },
-
-  saveButton: {
-    backgroundColor: '#3B5BDB',
-    borderRadius: 12,
-    padding: 16,
-    alignItems: 'center',
-    marginTop: 24,
-  },
-  saveButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-    fontSize: 16,
-  },
-  deleteButton: {
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: '#FF6B6B',
-    padding: 14,
-    alignItems: 'center',
-    marginTop: 10,
-  },
-  deleteButtonText: {
-    color: '#FF6B6B',
-    fontWeight: '700',
-    fontSize: 15,
-  },
-  cancelButton: {
-    alignItems: 'center',
-    marginTop: 12,
-    padding: 8,
-  },
-  cancelButtonText: {
-    color: '#888',
-    fontSize: 15,
-  },
-
-  // Sync error banner
   syncErrorBanner: {
     backgroundColor: '#FEF2F2',
     borderBottomWidth: 1,
