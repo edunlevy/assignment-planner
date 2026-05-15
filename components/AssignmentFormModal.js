@@ -1,5 +1,5 @@
 import { parseISO } from 'date-fns';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -73,16 +73,16 @@ export default function AssignmentFormModal({
   const insets = useSafeAreaInsets();
   const [form, setForm] = useState(EMPTY_FORM);
   const [fieldErrors, setFieldErrors] = useState(EMPTY_ERRORS);
-  const [initializedFor, setInitializedFor] = useState(null);
 
-  // Reset form state when the modal opens (or switches between create/edit).
-  // Tracked by a sentinel rather than useEffect so we don't fight callers.
-  const sentinel = visible ? (editing?.id ?? '__new__') : '__closed__';
-  if (initializedFor !== sentinel) {
-    setInitializedFor(sentinel);
+  // Reset form state when the modal opens or switches between create/edit.
+  // Effect-based so we don't issue setState during render (which Strict Mode
+  // and React 19 are stricter about). The `visible` gate ensures we only
+  // re-seed on open transitions, never while the user is mid-edit.
+  useEffect(() => {
+    if (!visible) return;
     setForm(formFor(editing));
     setFieldErrors(EMPTY_ERRORS);
-  }
+  }, [visible, editing?.id]);
 
   const isEditing = !!editing;
 
