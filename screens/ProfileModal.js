@@ -19,8 +19,9 @@ export default function ProfileModal({ visible, onClose, email, userId }) {
       } else {
         // Sign-out succeeded — now safe to cancel reminders and wipe
         // the local reminder map so the next sign-in reschedules fresh.
+        // Await the map write so onClose can't race ahead of the disk flush.
         await cancelAllReminders();
-        if (userId) saveReminderMap(userId, {});
+        if (userId) await saveReminderMap(userId, {});
         onClose();
       }
     } finally {
