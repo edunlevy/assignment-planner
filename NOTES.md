@@ -80,6 +80,33 @@ programmatically canceled after a fresh login or on a second device.
 
 ---
 
+## Phase D — Realtime sync (required)
+
+The app now subscribes to `postgres_changes` on the `assignments` table so a
+write on one device shows up on another within ~1 second, with reminders
+rescheduled or cancelled on each device. For this to work the table must be
+in the `supabase_realtime` publication. Run once in the SQL editor:
+
+```sql
+alter publication supabase_realtime add table public.assignments;
+```
+
+Notes:
+- The subscription is filtered by `user_id=eq.<current user>`, so a user
+  never sees another user's changes. RLS still applies to the underlying
+  rows.
+- Self-echoes (events that originated from this device) are suppressed by
+  an in-memory id set with an 8-second TTL. If a device's clock is wildly
+  off or its channel reconnects after a long pause, an echo could
+  occasionally slip through and be reapplied — that's idempotent except
+  for the reminder reschedule, which would cancel + re-create the same
+  reminder. Acceptable.
+- DELETE events only carry the row id (default `REPLICA IDENTITY`), which
+  is all we need. If you ever want the full old row on DELETE, run:
+  `alter table public.assignments replica identity full;`
+
+---
+
 ## Recommended index for scale
 
 `dbFetch` filters by `user_id` and orders by `due_date`. Once any single user has
