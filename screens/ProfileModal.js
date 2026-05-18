@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { cancelAllReminders, saveReminderMap } from '../lib/notifications';
 import { supabase } from '../lib/supabase';
@@ -7,6 +7,7 @@ import { supabase } from '../lib/supabase';
 export default function ProfileModal({ visible, onClose, email, userId }) {
   const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState('');
 
   async function handleSignOut() {
@@ -26,6 +27,41 @@ export default function ProfileModal({ visible, onClose, email, userId }) {
       }
     } finally {
       setLoading(false);
+    }
+  }
+
+  function confirmDelete() {
+    Alert.alert(
+      'Delete account?',
+      'This permanently erases your account and every assignment you have saved. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: handleDelete },
+      ],
+    );
+  }
+
+  async function handleDelete() {
+    setDeleting(true);
+    setError('');
+    try {
+      // Cancel reminders first so the OS doesn't fire a notification after
+      // the row is gone. Local-only operation; no network.
+      await cancelAllReminders();
+      if (userId) await saveReminderMap(userId, {});
+
+      const { error: rpcErr } = await supabase.rpc('delete_user');
+      if (rpcErr) {
+        setError('Could not delete account. Please try again or contact support.');
+        return;
+      }
+
+      // The auth row is gone — any further auth calls will fail. Clear the
+      // local session so the app returns to the sign-in screen cleanly.
+      await supabase.auth.signOut();
+      onClose();
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -49,9 +85,9 @@ export default function ProfileModal({ visible, onClose, email, userId }) {
           </View>
 
           <Pressable
-            style={[styles.signOutButton, loading && styles.signOutButtonDisabled]}
+            style={[styles.signOutButton, (loading || deleting) && styles.signOutButtonDisabled]}
             onPress={handleSignOut}
-            disabled={loading}
+            disabled={loading || deleting}
           >
             {loading
               ? <ActivityIndicator color="#DC2626" />
@@ -59,9 +95,20 @@ export default function ProfileModal({ visible, onClose, email, userId }) {
             }
           </Pressable>
 
+          <Pressable
+            style={[styles.deleteButton, (loading || deleting) && styles.signOutButtonDisabled]}
+            onPress={confirmDelete}
+            disabled={loading || deleting}
+          >
+            {deleting
+              ? <ActivityIndicator color="#FFFFFF" />
+              : <Text style={styles.deleteText}>Delete Account</Text>
+            }
+          </Pressable>
+
           {error ? <Text style={styles.error}>{error}</Text> : null}
 
-          <Pressable style={styles.closeButton} onPress={onClose} disabled={loading}>
+          <Pressable style={styles.closeButton} onPress={onClose} disabled={loading || deleting}>
             <Text style={styles.closeText}>Close</Text>
           </Pressable>
 
@@ -130,6 +177,18 @@ const styles = StyleSheet.create({
   },
   signOutText: {
     color: '#DC2626',
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  deleteButton: {
+    backgroundColor: '#DC2626',
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  deleteText: {
+    color: '#FFFFFF',
     fontWeight: '700',
     fontSize: 15,
   },
