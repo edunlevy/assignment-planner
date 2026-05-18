@@ -178,6 +178,28 @@ describe('reminder map persistence', () => {
     expect(await loadReminderMap('user-1')).toEqual({});
   });
 
+  test('loadReminderMap drops entries whose value is not a string array', async () => {
+    // Simulate a corrupted map where some assignment IDs map to non-arrays.
+    // Without sanitization, mergeReminderIds would attach the wrong shape
+    // and cancelReminders would silently skip the cancellation.
+    await AsyncStorage.setItem(
+      'reminder_ids_user-1',
+      JSON.stringify({
+        good: ['n1', 'n2'],
+        bareString: 'old-id',
+        nestedObj: { foo: 'bar' },
+        nullVal: null,
+        mixedArr: ['n3', 42],
+      })
+    );
+    expect(await loadReminderMap('user-1')).toEqual({ good: ['n1', 'n2'] });
+  });
+
+  test('loadReminderMap returns {} for a JSON array (not an object)', async () => {
+    await AsyncStorage.setItem('reminder_ids_user-1', JSON.stringify(['a', 'b']));
+    expect(await loadReminderMap('user-1')).toEqual({});
+  });
+
   test('loadReminderIdsFor reads from the on-disk map', async () => {
     await saveReminderMap('user-1', { a1: ['n1'] });
     expect(await loadReminderIdsFor('user-1', 'a1')).toEqual(['n1']);
