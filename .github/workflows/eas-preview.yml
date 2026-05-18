@@ -1,0 +1,30 @@
+name: EAS Preview Build (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Platform to build (ios, android, all)'
+        required: true
+        default: 'ios'
+        type: choice
+        options:
+          - ios
+          - android
+          - all
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+      - run: npm ci
+      - run: eas build --platform ${{ inputs.platform }} --profile preview --non-interactive --no-wait
