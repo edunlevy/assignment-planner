@@ -45,3 +45,6 @@ yarn-error.*
 
 # Local Claude Code workflow docs (skills, settings)
 .claude/
+
+# Local-only marketing files (demo credentials, secrets) — never commit
+marketing/*.local.md
