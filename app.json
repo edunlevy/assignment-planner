@@ -17,8 +17,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.elliedunlevy.assignmentplanner",
       "buildNumber": "1",
-      "config": {
-        "usesNonExemptEncryption": false
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
