@@ -16,6 +16,7 @@ import {
   requestNotificationPermission,
   saveReminderMap,
   scheduleReminders,
+  scheduleRemindersBatch,
 } from '../lib/notifications';
 
 // AsyncStorage key for the cached assignment list.
@@ -129,6 +130,33 @@ export function useAssignments(userId) {
         reminderMap = loadedMap;
         merged = mergeReminderIds(fresh, reminderMap);
 
+        // Reschedule reminders for incomplete assignments that have none
+        // on disk (covers the case where reminders were cleared on sign-out).
+        const updatedMap = { ...reminderMap };
+        // Schedule in a single batch against one shared iOS slot budget so
+        // concurrent schedules can't collectively overrun the 64-pending cap.
+        const needsScheduling = merged.filter(
+          a => a.status !== 'completed' && a.reminderIds.length === 0
+        );
+        const newIdsList = await scheduleRemindersBatch(needsScheduling);
+        const newIdsById = new Map(
+          needsScheduling.map((a, i) => [a.id, newIdsList[i]])
+        );
+        const withReminders = merged.map(a => {
+          if (!newIdsById.has(a.id)) return a;
+          const ids = newIdsById.get(a.id);
+          if (ids.length > 0) updatedMap[a.id] = ids;
+          return { ...a, reminderIds: ids };
+        });
+        if (cancelled) return;
+        if (thisFetch < dataVersionRef.current) {
+          setLoaded(true);
+          return;
+        }
+
+        if (!reminderMapsEqual(updatedMap, reminderMap)) {
+          await saveReminderMap(userId, updatedMap);
+        }
         dataVersionRef.current = thisFetch;
         setAssignments(merged);
         AsyncStorage.setItem(storageKey(userId), JSON.stringify(merged))
@@ -188,9 +216,11 @@ export function useAssignments(userId) {
 
   const insertMany = useCallback(async drafts => {
     const saved = await dbInsertMany(drafts, userId);
-    const withReminders = await Promise.all(
-      saved.map(async a => ({ ...a, reminderIds: await scheduleReminders(a) }))
-    );
+    // Sequential scheduling against one shared iOS slot budget — a parallel
+    // Promise.all would let every call read the same available count and
+    // collectively blow past the 64-pending cap.
+    const idsList = await scheduleRemindersBatch(saved);
+    const withReminders = saved.map((a, i) => ({ ...a, reminderIds: idsList[i] }));
     const map = await loadReminderMap(userId);
     for (const a of withReminders) map[a.id] = a.reminderIds;
     await saveReminderMap(userId, map);

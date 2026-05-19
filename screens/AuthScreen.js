@@ -1,4 +1,3 @@
-import * as Linking from 'expo-linking';
 import { useState } from 'react';
 import {
   ActivityIndicator,
@@ -39,9 +38,10 @@ export default function AuthScreen() {
     if (!email.trim()) { setError('Enter your email address above first'); return; }
     setLoading(true);
     try {
-      // redirectTo opens the app to the ResetPassword screen after the user taps the email link.
-      // Linking.createURL uses the Expo Go URL in development and the app scheme in production.
-      const redirectTo = Linking.createURL('reset-password');
+      // Email links must be https:// so they work from any browser (especially desktop Gmail).
+      // The hosted page reads Supabase's recovery token from the URL fragment and forwards
+      // to assignmentplanner://reset-password#... which the app's deep-link handler picks up.
+      const redirectTo = 'https://edunlevy.github.io/assignment-planner-web/reset-password.html';
       const { error: err } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo });
       if (err) {
         setError(err.message);

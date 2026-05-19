@@ -20,6 +20,7 @@ export default function CalendarView({ assignments, onSelectAssignment }) {
     for (const a of assignments) {
       if (!a.dueDate) continue;
       const dots = map[a.dueDate]?.dots ?? [];
+      // Cap dots per day to keep the marker readable.
       if (dots.length < 4) {
         dots.push({ key: a.id, color: STATUS_COLORS[a.status] ?? '#3B5BDB' });
       }

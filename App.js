@@ -312,6 +312,8 @@ function AppScreen() {
             <Text style={styles.profileButtonText}>Account</Text>
           </Pressable>
         </View>
+
+
         <View style={styles.segmented}>
           <Pressable
             style={[styles.segment, viewMode === 'list' && styles.segmentActive]}
@@ -442,6 +444,31 @@ const styles = StyleSheet.create({
     color: '#BFC8FF',
     marginTop: 4,
   },
+  segmented: {
+    flexDirection: 'row',
+    marginTop: 16,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    borderRadius: 10,
+    padding: 3,
+  },
+  segment: {
+    flex: 1,
+    paddingVertical: 8,
+    alignItems: 'center',
+    borderRadius: 8,
+  },
+  segmentActive: {
+    backgroundColor: '#FFFFFF',
+  },
+  segmentText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#BFC8FF',
+  },
+  segmentTextActive: {
+    color: '#3B5BDB',
+  },
+
   segmented: {
     flexDirection: 'row',
     marginTop: 16,
