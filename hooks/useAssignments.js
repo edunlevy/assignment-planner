@@ -13,6 +13,7 @@ import {
   loadReminderMap,
   mergeReminderIds,
   reminderMapsEqual,
+  requestNotificationPermission,
   saveReminderMap,
   scheduleReminders,
 } from '../lib/notifications';
@@ -124,8 +125,11 @@ export function useAssignments(userId) {
 
         const merged = mergeReminderIds(fresh, reminderMap);
 
-        // Reschedule reminders for incomplete assignments that have none
-        // on disk (covers the case where reminders were cleared on sign-out).
+        // Ensure permission is granted before scheduling; without this,
+        // the reschedule pass silently fails on fresh installs where the
+        // permission prompt hasn't resolved yet.
+        await requestNotificationPermission();
+
         const updatedMap = { ...reminderMap };
         const withReminders = await Promise.all(
           merged.map(async a => {

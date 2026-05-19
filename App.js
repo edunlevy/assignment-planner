@@ -14,7 +14,6 @@ import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-cont
 import AssignmentFormModal, { STATUS_COLORS, STATUS_LABELS } from './components/AssignmentFormModal';
 import { useAssignments } from './hooks/useAssignments';
 import { parseAuthRedirect } from './lib/deepLink';
-import { requestNotificationPermission } from './lib/notifications';
 import { buildWeeklySeries } from './lib/recurring';
 import { supabase } from './lib/supabase';
 import AuthScreen from './screens/AuthScreen';
@@ -165,6 +164,15 @@ function AppScreen() {
   useEffect(() => {
     async function handleDeepLink(url) {
       const params = parseAuthRedirect(url);
+
+      // PKCE flow: Supabase sends ?code= instead of fragment tokens
+      if (params.code) {
+        const { error } = await supabase.auth.exchangeCodeForSession(params.code);
+        if (!error && params.type === 'recovery') setRecoveryMode(true);
+        return;
+      }
+
+      // Implicit flow: fragment tokens
       if (params.type === 'recovery' && params.access_token) {
         const { error } = await supabase.auth.setSession({
           access_token: params.access_token,
@@ -178,10 +186,6 @@ function AppScreen() {
     return () => sub.remove();
   }, []);
 
-  // Request notification permission once when the user is logged in
-  useEffect(() => {
-    if (userId) requestNotificationPermission();
-  }, [userId]);
 
   function openAddModal() {
     setEditingId(null);

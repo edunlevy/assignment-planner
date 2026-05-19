@@ -45,19 +45,16 @@ export default function ProfileModal({ visible, onClose, email, userId }) {
     setDeleting(true);
     setError('');
     try {
-      // Cancel reminders first so the OS doesn't fire a notification after
-      // the row is gone. Local-only operation; no network.
-      await cancelAllReminders();
-      if (userId) await saveReminderMap(userId, {});
-
       const { error: rpcErr } = await supabase.rpc('delete_user');
       if (rpcErr) {
         setError('Could not delete account. Please try again or contact support.');
         return;
       }
 
-      // The auth row is gone — any further auth calls will fail. Clear the
-      // local session so the app returns to the sign-in screen cleanly.
+      // Deletion succeeded — now safe to clean up local reminders.
+      await cancelAllReminders();
+      if (userId) await saveReminderMap(userId, {});
+
       await supabase.auth.signOut();
       onClose();
     } finally {
