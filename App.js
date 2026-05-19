@@ -163,12 +163,16 @@ function AppScreen() {
   // (not PASSWORD_RECOVERY), so we set recoveryMode directly on success.
   useEffect(() => {
     async function handleDeepLink(url) {
+      if (!url) return;
+      const isResetLink = url.includes('reset-password');
       const params = parseAuthRedirect(url);
 
-      // PKCE flow: Supabase sends ?code= instead of fragment tokens
+      // PKCE flow: Supabase sends ?code= instead of fragment tokens.
+      // The URL path already scopes this to password resets, so a
+      // successful exchange always means recovery.
       if (params.code) {
         const { error } = await supabase.auth.exchangeCodeForSession(params.code);
-        if (!error && params.type === 'recovery') setRecoveryMode(true);
+        if (!error && isResetLink) setRecoveryMode(true);
         return;
       }
 

@@ -110,47 +110,28 @@ export function useAssignments(userId) {
         // Cache unreadable — proceed to Supabase fetch regardless
       }
 
+      // Fetch and reminder scheduling are split into two try blocks so a
+      // notification permission/scheduling failure can't mask a successful fetch.
+      let merged;
+      let reminderMap;
       try {
-        const [fresh, reminderMap] = await Promise.all([
+        const [fresh, loadedMap] = await Promise.all([
           dbFetch(userId),
           loadReminderMap(userId),
         ]);
         if (cancelled) return;
 
-        // Stale-fetch guard: a local write has overtaken this fetch.
         if (thisFetch < dataVersionRef.current) {
           setLoaded(true);
           return;
         }
 
-        const merged = mergeReminderIds(fresh, reminderMap);
+        reminderMap = loadedMap;
+        merged = mergeReminderIds(fresh, reminderMap);
 
-        // Ensure permission is granted before scheduling; without this,
-        // the reschedule pass silently fails on fresh installs where the
-        // permission prompt hasn't resolved yet.
-        await requestNotificationPermission();
-
-        const updatedMap = { ...reminderMap };
-        const withReminders = await Promise.all(
-          merged.map(async a => {
-            if (a.status === 'completed' || a.reminderIds.length > 0) return a;
-            const ids = await scheduleReminders(a);
-            if (ids.length > 0) updatedMap[a.id] = ids;
-            return { ...a, reminderIds: ids };
-          })
-        );
-        if (cancelled) return;
-        if (thisFetch < dataVersionRef.current) {
-          setLoaded(true);
-          return;
-        }
-
-        if (!reminderMapsEqual(updatedMap, reminderMap)) {
-          await saveReminderMap(userId, updatedMap);
-        }
         dataVersionRef.current = thisFetch;
-        setAssignments(withReminders);
-        AsyncStorage.setItem(storageKey(userId), JSON.stringify(withReminders))
+        setAssignments(merged);
+        AsyncStorage.setItem(storageKey(userId), JSON.stringify(merged))
           .catch(() => {});
       } catch {
         if (!cancelled) {
@@ -158,6 +139,34 @@ export function useAssignments(userId) {
         }
       } finally {
         if (!cancelled) setLoaded(true);
+      }
+
+      // Reschedule reminders for incomplete assignments missing IDs.
+      // Isolated so failures here never block or misreport the fetch above.
+      if (!cancelled && merged) {
+        try {
+          await requestNotificationPermission();
+
+          const updatedMap = { ...reminderMap };
+          const withReminders = await Promise.all(
+            merged.map(async a => {
+              if (a.status === 'completed' || a.reminderIds.length > 0) return a;
+              const ids = await scheduleReminders(a);
+              if (ids.length > 0) updatedMap[a.id] = ids;
+              return { ...a, reminderIds: ids };
+            })
+          );
+          if (cancelled || thisFetch < dataVersionRef.current) return;
+
+          if (!reminderMapsEqual(updatedMap, reminderMap)) {
+            await saveReminderMap(userId, updatedMap);
+          }
+          setAssignments(withReminders);
+          AsyncStorage.setItem(storageKey(userId), JSON.stringify(withReminders))
+            .catch(() => {});
+        } catch {
+          // Permission or scheduling failed — assignments are already rendered
+        }
       }
     })();
 
