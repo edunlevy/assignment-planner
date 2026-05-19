@@ -66,10 +66,9 @@ export default function ProfileModal({ visible, onClose, email, userId }) {
     <Modal
       visible={visible}
       animationType="slide"
-      transparent
+      presentationStyle="pageSheet"
       onRequestClose={onClose}
     >
-      <View style={styles.overlay}>
         <View style={[styles.sheet, { paddingBottom: insets.bottom + 24 }]}>
 
           <View style={styles.handle} />
@@ -110,21 +109,14 @@ export default function ProfileModal({ visible, onClose, email, userId }) {
           </Pressable>
 
         </View>
-      </View>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'flex-end',
-  },
   sheet: {
+    flex: 1,
     backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
     padding: 24,
   },
   handle: {

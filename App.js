@@ -12,6 +12,7 @@ import {
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import AssignmentFormModal, { STATUS_COLORS, STATUS_LABELS } from './components/AssignmentFormModal';
+import CalendarView from './components/CalendarView';
 import { useAssignments } from './hooks/useAssignments';
 import { parseAuthRedirect } from './lib/deepLink';
 import { buildWeeklySeries } from './lib/recurring';
@@ -127,6 +128,7 @@ function AppScreen() {
   const [sessionLoaded, setSessionLoaded] = useState(false);
   const [profileVisible, setProfileVisible] = useState(false);
   const [recoveryMode, setRecoveryMode] = useState(false);
+  const [viewMode, setViewMode] = useState('list');
   const [modalVisible, setModalVisible] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -310,6 +312,24 @@ function AppScreen() {
             <Text style={styles.profileButtonText}>Account</Text>
           </Pressable>
         </View>
+        <View style={styles.segmented}>
+          <Pressable
+            style={[styles.segment, viewMode === 'list' && styles.segmentActive]}
+            onPress={() => setViewMode('list')}
+          >
+            <Text style={[styles.segmentText, viewMode === 'list' && styles.segmentTextActive]}>
+              List
+            </Text>
+          </Pressable>
+          <Pressable
+            style={[styles.segment, viewMode === 'calendar' && styles.segmentActive]}
+            onPress={() => setViewMode('calendar')}
+          >
+            <Text style={[styles.segmentText, viewMode === 'calendar' && styles.segmentTextActive]}>
+              Calendar
+            </Text>
+          </Pressable>
+        </View>
       </View>
 
       {syncError ? (
@@ -318,16 +338,23 @@ function AppScreen() {
         </Pressable>
       ) : null}
 
-      <FlatList
-        data={sorted}
-        keyExtractor={item => item.id}
-        renderItem={({ item }) => (
-          <AssignmentRow item={item} onPress={() => openEditModal(item)} />
-        )}
-        ListHeaderComponent={workOnNext ? <WorkOnNextCard assignment={workOnNext} /> : null}
-        contentContainerStyle={[styles.list, sorted.length === 0 && styles.listEmpty]}
-        ListEmptyComponent={<EmptyState />}
-      />
+      {viewMode === 'list' ? (
+        <FlatList
+          data={sorted}
+          keyExtractor={item => item.id}
+          renderItem={({ item }) => (
+            <AssignmentRow item={item} onPress={() => openEditModal(item)} />
+          )}
+          ListHeaderComponent={workOnNext ? <WorkOnNextCard assignment={workOnNext} /> : null}
+          contentContainerStyle={[styles.list, sorted.length === 0 && styles.listEmpty]}
+          ListEmptyComponent={<EmptyState />}
+        />
+      ) : (
+        <CalendarView
+          assignments={assignments}
+          onSelectAssignment={openEditModal}
+        />
+      )}
 
       <Pressable style={[styles.fab, { bottom: insets.bottom + 16 }]} onPress={openAddModal}>
         <Text style={styles.fabText}>+</Text>
@@ -385,7 +412,7 @@ const styles = StyleSheet.create({
 
   header: {
     backgroundColor: '#3B5BDB',
-    paddingBottom: 20,
+    paddingBottom: 12,
     paddingHorizontal: 20,
   },
   headerRow: {
@@ -414,6 +441,30 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#BFC8FF',
     marginTop: 4,
+  },
+  segmented: {
+    flexDirection: 'row',
+    marginTop: 16,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    borderRadius: 10,
+    padding: 3,
+  },
+  segment: {
+    flex: 1,
+    paddingVertical: 8,
+    alignItems: 'center',
+    borderRadius: 8,
+  },
+  segmentActive: {
+    backgroundColor: '#FFFFFF',
+  },
+  segmentText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#BFC8FF',
+  },
+  segmentTextActive: {
+    color: '#3B5BDB',
   },
 
   list: {

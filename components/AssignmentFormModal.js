@@ -160,8 +160,7 @@ export default function AssignmentFormModal({
   }
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={styles.modalOverlay}>
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
         <View style={[styles.modalSheet, { paddingBottom: insets.bottom + 24 }]}>
           <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
             <Text style={styles.modalTitle}>
@@ -172,6 +171,7 @@ export default function AssignmentFormModal({
             <TextInput
               style={[styles.input, fieldErrors.title ? styles.inputError : null]}
               placeholder="e.g. Problem Set 4"
+              autoCapitalize="words"
               value={form.title}
               onChangeText={t => {
                 setForm(f => ({ ...f, title: t }));
@@ -184,6 +184,7 @@ export default function AssignmentFormModal({
             <TextInput
               style={[styles.input, fieldErrors.course ? styles.inputError : null]}
               placeholder="e.g. MATH 201"
+              autoCapitalize="words"
               value={form.course}
               onChangeText={t => {
                 setForm(f => ({ ...f, course: t }));
@@ -318,7 +319,6 @@ export default function AssignmentFormModal({
             </Pressable>
           </ScrollView>
         </View>
-      </View>
     </Modal>
   );
 }
@@ -326,17 +326,10 @@ export default function AssignmentFormModal({
 export { STATUS_LABELS, STATUS_COLORS };
 
 const styles = StyleSheet.create({
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'flex-end',
-  },
   modalSheet: {
+    flex: 1,
     backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
     padding: 24,
-    maxHeight: '90%',
   },
   modalTitle: {
     fontSize: 20,
