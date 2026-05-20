@@ -313,7 +313,6 @@ function AppScreen() {
           </Pressable>
         </View>
 
-
         <View style={styles.segmented}>
           <Pressable
             style={[styles.segment, viewMode === 'list' && styles.segmentActive]}
