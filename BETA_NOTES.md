@@ -31,9 +31,9 @@ Tracker for Phase 14 — internal distribution beta. Update this file as feedbac
 ```
 Hi! Thanks for testing Assignment Planner.
 
-Please try each of these within the first week. Reply with anything
-that feels broken, confusing, or missing.
+Please try each of these and reply with anything broken, confusing, or missing.
 
+Core flows:
 [ ] Sign up with a new email address
 [ ] Log in and log out
 [ ] Add 3 assignments with different due dates and importance levels
@@ -42,9 +42,26 @@ that feels broken, confusing, or missing.
 [ ] Add a weekly recurring assignment (3–4 weeks)
 [ ] Mark an assignment as completed — check it moves to the bottom
 [ ] Close the app completely and reopen — check assignments are still there
-[ ] Wait for a reminder to fire (add something due in a few minutes)
 [ ] Sign out and sign back in — check assignments reload correctly
-[ ] Try on Wi-Fi and on mobile data — check sync works on both
+
+Reminders:
+[ ] On first login, allow notifications when prompted
+[ ] Add an assignment due tomorrow — you should get a reminder
+[ ] If you denied notifications initially, go to Settings → Assignment Planner → Notifications → enable, then sign out and back in — reminders should start working
+
+Password reset:
+[ ] Tap "Forgot password" on the login screen
+[ ] Check your email, tap the reset link
+[ ] Confirm the "Set New Password" modal appears in the app
+[ ] Set a new password, then sign out and sign back in with it
+
+Account deletion:
+[ ] Tap Account → Delete Account → confirm
+[ ] Verify you're returned to the sign-in screen
+[ ] Try signing in with the deleted account — it should fail
+
+General:
+[ ] Try on Wi-Fi and on mobile data
 [ ] Screenshot anything that looks broken or confusing
 ```
 
