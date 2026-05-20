@@ -43,6 +43,9 @@ yarn-error.*
 /ios
 /android
 
+# Jest coverage output
+coverage/
+
 # Local Claude Code workflow docs (skills, settings)
 .claude/
 
