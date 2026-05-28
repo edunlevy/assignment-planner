@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -9,7 +10,9 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import * as AppleAuthentication from 'expo-apple-authentication';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { signInWithApple, signInWithGoogle } from '../lib/socialAuth';
 import { supabase } from '../lib/supabase';
 
 export default function AuthScreen() {
@@ -20,6 +23,13 @@ export default function AuthScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
+  const [appleAvailable, setAppleAvailable] = useState(false);
+
+  useEffect(() => {
+    if (Platform.OS === 'ios') {
+      AppleAuthentication.isAvailableAsync().then(setAppleAvailable);
+    }
+  }, []);
 
   function clearMessages() {
     setError('');
@@ -41,7 +51,7 @@ export default function AuthScreen() {
       // Email links must be https:// so they work from any browser (especially desktop Gmail).
       // The hosted page reads Supabase's recovery token from the URL fragment and forwards
       // to assignmentplanner://reset-password#... which the app's deep-link handler picks up.
-      const redirectTo = 'https://edunlevy.github.io/assignment-planner-web/reset-password.html';
+      const redirectTo = 'https://edunlevy.github.io/assignment-planner/reset-password.html';
       const { error: err } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo });
       if (err) {
         setError(err.message);
@@ -68,9 +78,13 @@ export default function AuthScreen() {
         });
         if (err) setError(err.message);
       } else {
+        // Email links must be https:// so they survive Mail/Gmail link rewriting.
+        // The hosted page forwards into assignmentplanner:// for the installed app.
+        const emailRedirectTo = 'https://edunlevy.github.io/assignment-planner/confirm-email.html';
         const { error: err } = await supabase.auth.signUp({
           email: email.trim(),
           password,
+          options: { emailRedirectTo },
         });
         if (err) {
           setError(err.message);
@@ -82,6 +96,33 @@ export default function AuthScreen() {
           setInfo('Account created! Check your email to confirm, then log in.');
         }
       }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleAppleSignIn() {
+    clearMessages();
+    setLoading(true);
+    try {
+      await signInWithApple();
+      // onAuthStateChange in App.js fires SIGNED_IN and unmounts this screen
+    } catch (e) {
+      if (e.code !== 'ERR_REQUEST_CANCELED') setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleGoogleSignIn() {
+    clearMessages();
+    setLoading(true);
+    try {
+      const result = await signInWithGoogle();
+      if (result === null) return; // user cancelled — stay silent
+      // onAuthStateChange in App.js fires SIGNED_IN and unmounts this screen
+    } catch (e) {
+      setError(e.message);
     } finally {
       setLoading(false);
     }
@@ -160,6 +201,41 @@ export default function AuthScreen() {
               </Text>
           }
         </Pressable>
+
+        {/* Social login — native only (Google SDK not implemented for web) */}
+        {Platform.OS !== 'web' && (
+          <>
+            <View style={styles.divider}>
+              <View style={styles.dividerLine} />
+              <Text style={styles.dividerText}>or continue with</Text>
+              <View style={styles.dividerLine} />
+            </View>
+
+            {/* Sign in with Apple — iOS only, when available */}
+            {appleAvailable && (
+              <AppleAuthentication.AppleAuthenticationButton
+                buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
+                buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
+                cornerRadius={12}
+                style={styles.appleButton}
+                onPress={handleAppleSignIn}
+              />
+            )}
+
+            {/* Continue with Google */}
+            <Pressable
+              style={[styles.googleButton, loading && styles.buttonDisabled]}
+              onPress={handleGoogleSignIn}
+              disabled={loading}
+            >
+              <Image
+                source={{ uri: 'https://www.google.com/favicon.ico' }}
+                style={styles.googleIcon}
+              />
+              <Text style={styles.googleButtonText}>Continue with Google</Text>
+            </Pressable>
+          </>
+        )}
       </View>
     </KeyboardAvoidingView>
   );
@@ -271,5 +347,47 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '700',
     fontSize: 16,
+  },
+  divider: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 20,
+    marginBottom: 12,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#E5E9FF',
+  },
+  dividerText: {
+    marginHorizontal: 10,
+    fontSize: 13,
+    color: '#999',
+  },
+  appleButton: {
+    width: '100%',
+    height: 50,
+    marginBottom: 10,
+  },
+  googleButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#DADCE0',
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+  },
+  googleIcon: {
+    width: 18,
+    height: 18,
+    marginRight: 10,
+  },
+  googleButtonText: {
+    color: '#3C4043',
+    fontWeight: '600',
+    fontSize: 15,
   },
 });

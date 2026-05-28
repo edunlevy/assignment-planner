@@ -1,5 +1,35 @@
 # Project Notes
 
+## Auth redirect URLs (Supabase dashboard — one-time setup)
+
+The password-reset and email-confirmation flows use hosted redirect pages on
+GitHub Pages to bridge the gap between Supabase's `https://` email links and
+the app's `assignmentplanner://` deep-link scheme.
+
+**Add both of these to Supabase → Authentication → URL Configuration → Redirect URLs:**
+
+```
+https://edunlevy.github.io/assignment-planner/reset-password.html
+https://edunlevy.github.io/assignment-planner/confirm-email.html
+```
+
+A wildcard entry also works and is easier to maintain:
+
+```
+https://edunlevy.github.io/**
+```
+
+Without this, Supabase ignores the `redirectTo` parameter and the email link
+either points to a broken URL or is stripped entirely.
+
+**Site URL** (Supabase → Authentication → URL Configuration → Site URL):
+
+```
+https://edunlevy.github.io/assignment-planner
+```
+
+---
+
 ## Phase 8 — Supabase Setup
 
 ### What to do manually (one-time, in the Supabase dashboard)
@@ -104,6 +134,128 @@ Notes:
 - DELETE events only carry the row id (default `REPLICA IDENTITY`), which
   is all we need. If you ever want the full old row on DELETE, run:
   `alter table public.assignments replica identity full;`
+
+---
+
+## Phase E — Complexity / length gauge
+
+> **⚠️ Required before deploying** — `lib/assignmentsDb.js` reads and writes
+> a `complexity` column that does not exist in the original schema. Run the
+> SQL below in the Supabase SQL Editor before shipping the PR 3 build.
+> Fresh installs and production databases without this migration will error
+> on every INSERT and UPDATE once the client starts sending `complexity`.
+
+Adds a per-assignment `complexity` field so the recommendation logic (PR 4)
+can surface longer assignments earlier than short ones with similar due
+dates. Values: `'short'`, `'medium'`, `'long'`. Default: `'medium'` (so
+existing rows stay valid without a backfill).
+
+The canonical SQL is in **[`db/migrations/2026-05-27_complexity_column.sql`](db/migrations/2026-05-27_complexity_column.sql)**
+— use that file to apply the migration. The DDL below is kept here for
+reference only.
+
+```sql
+alter table public.assignments
+  add column if not exists complexity text not null default 'medium';
+
+-- Constrain to the three valid values. The check is added separately so the
+-- column ADD is non-blocking on a large table.
+alter table public.assignments
+  drop constraint if exists assignments_complexity_check;
+
+alter table public.assignments
+  add constraint assignments_complexity_check
+  check (complexity in ('short', 'medium', 'long'));
+```
+
+Notes:
+- `sanitizeAssignment` defaults `complexity` to `'medium'` for cached rows
+  that pre-date the migration, so the app keeps working if AsyncStorage has
+  rows without the field.
+- Realtime payloads pick up the new column automatically via `fromDb`'s
+  `FIELD_MAP`-driven mapper — no realtime publication change required.
+
+---
+
+## Audit — Time zone behavior (pre-fix)
+
+This section documents the current notification time-zone behavior before the
+time-zone-aware fix lands. No code has been changed yet; this is the baseline
+reviewers should confirm against the source.
+
+### Where local time is touched
+
+| File / line | Code | Effect |
+|---|---|---|
+| [lib/notifications.js:64-66](lib/notifications.js) | `new Date(y, m-1, d, 23, 59, 0)` | Builds a JS Date at 23:59 in the **device's current local TZ at scheduling time** |
+| [lib/notifications.js:94](lib/notifications.js) | `trigger: { type: 'date', date: new Date(triggerMs), channelId: 'reminders' }` | Schedules at an **absolute UTC moment** (derived from `triggerMs = dueAt.getTime() - offsetMs`) |
+| [App.js:30](App.js) | `differenceInCalendarDays(parseISO(dueDateStr), new Date())` | Renders "Due in N days" using device local clock — recomputes on every render, so it is naturally TZ-correct |
+| [lib/recurring.js](lib/recurring.js) | `parseISO`, `addWeeks`, `format(..., 'yyyy-MM-dd')` | Operates on date strings only — no time component, so TZ-immune |
+| [components/DueDateField.js](components/DueDateField.js) | `format(selectedDate, 'yyyy-MM-dd')` | Stores date-only string — TZ-immune |
+
+The `dueDate` field is stored as a date-only `'YYYY-MM-DD'` string (DB column
+type `date`). The TZ problem is **not** in storage — it is in how the trigger
+millisecond is materialised at scheduling time.
+
+### Root cause
+
+`expo-notifications` with `type: 'date'` translates to:
+- **iOS**: `UNTimeIntervalNotificationTrigger` — fires when the system clock
+  reaches that UTC instant. Wall-clock local time is irrelevant.
+- **Android**: `AlarmManager.setExact` (or `setExactAndAllowWhileIdle`) at
+  the absolute timestamp — same behavior, fires at the UTC instant.
+
+So once scheduled, the notification's fire moment is frozen in UTC. The
+device's later interpretation of that moment in local wall time depends on
+its current TZ.
+
+### Concrete failure scenario
+
+1. User in **EST** (UTC-5) creates an assignment with `dueDate = '2026-06-01'`.
+2. `scheduleReminders` runs: `dueAt = new Date(2026, 5, 1, 23, 59, 0)` =
+   2026-06-01 23:59 EST = **2026-06-02 04:59 UTC**.
+3. The 24-hour reminder is scheduled for `triggerMs = dueAt.getTime() - 86400000`
+   = **2026-06-01 04:59 UTC** = 2026-05-31 23:59 EST. ✓ Correct.
+4. User flies to **PST** (UTC-8). Phone TZ updates.
+5. The reminder still fires at 2026-06-01 04:59 UTC, which the phone now
+   displays as **2026-05-31 20:59 PST**. ✗ User receives "Due tomorrow" three
+   hours before midnight on the day *before* due, not at 11:59 PM local.
+
+The 1-hour reminder has the same flaw, just smaller absolute offset.
+
+### Why the load effect doesn't save us
+
+The load effect in `useAssignments.js` reschedules reminders only for rows
+with `reminderIds.length === 0`. After a TZ change, rows still have their
+stale IDs in the map, so the reschedule branch is skipped.
+
+A naive fix that just rescheduled on every load would also not help — the
+load effect runs on app launch / userId change, not on a TZ change while the
+app is already open.
+
+### Proposed fix (lands in next PR)
+
+Two complementary layers — see the `timezone-notifications` skill for the
+full implementation pattern:
+
+1. **CALENDAR trigger**: switch from
+   `{ type: 'date', date: ... }` to
+   `{ type: SchedulableTriggerInputTypes.CALENDAR, year, month, day, hour, minute }`.
+   iOS `UNCalendarNotificationTrigger` fires at the local date/time
+   components in whatever TZ the device is in at fire time — automatic
+   adjustment on TZ change.
+
+2. **AppState reschedule**: persist the device TZ string per user; when the
+   app foregrounds and the current TZ differs from the stored TZ, cancel and
+   reschedule all incomplete-assignment reminders. Covers the Android edge
+   case and acts as belt-and-suspenders on iOS.
+
+### Sentinel tests
+
+Three `test.todo` entries were added to `__tests__/lib/notifications.test.js`
+under the `describe('time zone behavior', ...)` block as part of the audit PR.
+They were promoted to **passing tests** in the subsequent fix PR (PR 2) once
+the CALENDAR trigger and AppState reschedule were implemented.
 
 ---
 

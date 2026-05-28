@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Confirm Email — Assignment Planner</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="card">
+    <div class="logo" id="logo">✉️</div>
+    <h1 id="heading">Confirming your email…</h1>
+    <p class="subtitle" id="subtitle">Please wait a moment.</p>
+
+    <button class="btn" id="open-btn" style="display:none">Open Assignment Planner</button>
+
+    <p class="status" id="status"></p>
+  </div>
+
+  <script>
+    (function () {
+      var SCHEME = "assignmentplanner://";
+
+      // Supabase appends tokens in the fragment for email confirmation:
+      // #access_token=...&refresh_token=...&type=signup
+      var fragment = window.location.hash;
+
+      // Also check query params as a fallback (some email clients strip fragments)
+      var search = window.location.search;
+
+      var isConfirmation =
+        (fragment && fragment.indexOf("type=signup") !== -1) ||
+        (search && search.indexOf("type=signup") !== -1);
+
+      var isRecovery =
+        (fragment && fragment.indexOf("type=recovery") !== -1) ||
+        (search && search.indexOf("type=recovery") !== -1);
+
+      // PKCE flow: Supabase sends ?code=... in the query string. We forward
+      // the whole query string into the app's deep-link handler, which calls
+      // exchangeCodeForSession to complete the signup confirmation.
+      var hasPkceCode = search && search.indexOf("code=") !== -1;
+
+      if (!fragment && !hasPkceCode) {
+        document.getElementById("logo").textContent = "✅";
+        document.getElementById("heading").textContent = "Email Confirmed";
+        document.getElementById("subtitle").textContent =
+          "Your email has been confirmed. You can now sign in to Assignment Planner.";
+        document.getElementById("status").textContent =
+          "Open the app on your device to get started.";
+        return;
+      }
+
+      if (isRecovery) {
+        // Forward both query string (PKCE: ?code=...) and fragment (implicit:
+        // #access_token=...) so reset-password.html receives the token
+        // regardless of which flow Supabase used.
+        window.location.href =
+          "https://edunlevy.github.io/assignment-planner/reset-password.html" + (search || "") + (fragment || "");
+        return;
+      }
+
+      // Email confirmation success — show message and offer to open app
+      document.getElementById("logo").textContent = "✅";
+      document.getElementById("heading").textContent = "Email Confirmed!";
+      document.getElementById("subtitle").textContent =
+        "Your email address has been verified. Opening Assignment Planner…";
+
+      var deepLink = SCHEME + "confirm" + (hasPkceCode ? search : "") + (fragment || "");
+      window.location.href = deepLink;
+
+      setTimeout(function () {
+        var btn = document.getElementById("open-btn");
+        var status = document.getElementById("status");
+        btn.style.display = "inline-block";
+        btn.onclick = function () { window.location.href = deepLink; };
+        status.textContent =
+          "If the app did not open automatically, tap the button above.";
+      }, 1500);
+    })();
+  </script>
+</body>
+</html>
