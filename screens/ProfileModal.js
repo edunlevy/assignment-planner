@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useState } from 'react';
 import { ActivityIndicator, Alert, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -55,9 +56,16 @@ export default function ProfileModal({ visible, onClose, email, userId }) {
         return;
       }
 
-      // Deletion succeeded — now safe to clean up local reminders.
+      // Deletion succeeded — wipe all local data for this user.
+      // Order: reminders first (cancel OS notifications), then maps and
+      // assignment cache (privacy + prevents stale data resurfacing).
       await cancelAllReminders();
-      if (userId) await saveReminderMap(userId, {});
+      if (userId) {
+        await saveReminderMap(userId, {});
+        // Remove the assignment cache so deleted data can't resurface
+        // if session cleanup misbehaves after the account is gone.
+        await AsyncStorage.removeItem(`assignments_${userId}`);
+      }
       // Best-effort Google SDK sign-out for the same reason as handleSignOut.
       await GoogleSignin.signOut().catch(() => {});
 

@@ -1,4 +1,3 @@
-import { parseISO } from 'date-fns';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -14,8 +13,8 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DueDateField from './DueDateField';
-import { isValidDate } from '../lib/assignment';
-import { countWeeklyOccurrences, MAX_WEEKLY_OCCURRENCES } from '../lib/recurring';
+import RecurringSeriesSection from './RecurringSeriesSection';
+import { validateAssignmentForm, EMPTY_ERRORS } from '../lib/formValidation';
 
 const STATUS_LABELS = {
   not_started: 'Not Started',
@@ -51,7 +50,7 @@ const EMPTY_FORM = {
   repeatWeekly: false, repeatUntil: '',
 };
 
-const EMPTY_ERRORS = { title: '', course: '', dueDate: '', repeatUntil: '' };
+// EMPTY_ERRORS imported from lib/formValidation
 
 function formFor(item) {
   if (!item) return EMPTY_FORM;
@@ -96,38 +95,8 @@ export default function AssignmentFormModal({
 
   const isEditing = !!editing;
 
-  function validate() {
-    const errors = { ...EMPTY_ERRORS };
-    if (!form.title.trim()) errors.title = 'Title is required';
-    if (!form.course.trim()) errors.course = 'Course is required';
-    if (!form.dueDate.trim()) {
-      errors.dueDate = 'Due date is required';
-    } else if (!isValidDate(form.dueDate.trim())) {
-      errors.dueDate = 'Enter a valid date in YYYY-MM-DD format (e.g. 2026-06-01)';
-    }
-    if (!isEditing && form.repeatWeekly) {
-      if (!form.repeatUntil.trim()) {
-        errors.repeatUntil = 'End date is required when repeating';
-      } else if (!isValidDate(form.repeatUntil.trim())) {
-        errors.repeatUntil = 'Enter a valid date in YYYY-MM-DD format (e.g. 2026-08-01)';
-      } else if (!errors.dueDate) {
-        const start = parseISO(form.dueDate.trim());
-        const until = parseISO(form.repeatUntil.trim());
-        if (!(until > start)) {
-          errors.repeatUntil = 'End date must be after the first due date';
-        } else {
-          const occurrences = countWeeklyOccurrences(form.dueDate.trim(), form.repeatUntil.trim());
-          if (occurrences > MAX_WEEKLY_OCCURRENCES) {
-            errors.repeatUntil = `Pick an end date within ${MAX_WEEKLY_OCCURRENCES} weeks of the first due date`;
-          }
-        }
-      }
-    }
-    return errors;
-  }
-
   async function handleSave() {
-    const errors = validate();
+    const errors = validateAssignmentForm(form, { isEditing });
     if (errors.title || errors.course || errors.dueDate || errors.repeatUntil) {
       setFieldErrors(errors);
       return;
@@ -269,36 +238,17 @@ export default function AssignmentFormModal({
             </Text>
 
             {!isEditing && (
-              <>
-                <Pressable
-                  style={styles.repeatToggleRow}
-                  onPress={() => setForm(f => ({ ...f, repeatWeekly: !f.repeatWeekly, repeatUntil: '' }))}
-                >
-                  <View style={[styles.checkbox, form.repeatWeekly && styles.checkboxChecked]}>
-                    {form.repeatWeekly && <Text style={styles.checkmark}>✓</Text>}
-                  </View>
-                  <Text style={styles.repeatToggleLabel}>Repeat weekly until…</Text>
-                </Pressable>
-
-                {form.repeatWeekly && (
-                  <>
-                    <Text style={styles.label}>Repeat until</Text>
-                    <DueDateField
-                      value={form.repeatUntil}
-                      hasError={!!fieldErrors.repeatUntil}
-                      placeholder="Tap to choose an end date"
-                      minimumDate={isValidDate(form.dueDate) ? parseISO(form.dueDate) : undefined}
-                      onChange={iso => {
-                        setForm(f => ({ ...f, repeatUntil: iso }));
-                        if (fieldErrors.repeatUntil) setFieldErrors(e => ({ ...e, repeatUntil: '' }));
-                      }}
-                    />
-                    {fieldErrors.repeatUntil
-                      ? <Text style={styles.errorText}>{fieldErrors.repeatUntil}</Text>
-                      : null}
-                  </>
-                )}
-              </>
+              <RecurringSeriesSection
+                repeatWeekly={form.repeatWeekly}
+                repeatUntil={form.repeatUntil}
+                dueDate={form.dueDate}
+                repeatUntilError={fieldErrors.repeatUntil}
+                onToggle={() => setForm(f => ({ ...f, repeatWeekly: !f.repeatWeekly, repeatUntil: '' }))}
+                onRepeatUntilChange={iso => {
+                  setForm(f => ({ ...f, repeatUntil: iso }));
+                  if (fieldErrors.repeatUntil) setFieldErrors(e => ({ ...e, repeatUntil: '' }));
+                }}
+              />
             )}
 
             {isEditing && (
@@ -433,37 +383,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#888',
     marginTop: 6,
-  },
-  repeatToggleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 20,
-    gap: 10,
-  },
-  checkbox: {
-    width: 22,
-    height: 22,
-    borderRadius: 5,
-    borderWidth: 2,
-    borderColor: '#DDE2FF',
-    backgroundColor: '#F8F9FF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  checkboxChecked: {
-    backgroundColor: '#3B5BDB',
-    borderColor: '#3B5BDB',
-  },
-  checkmark: {
-    color: '#FFFFFF',
-    fontSize: 13,
-    fontWeight: '700',
-    lineHeight: 16,
-  },
-  repeatToggleLabel: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#1A1A2E',
   },
   statusRow: {
     flexDirection: 'row',

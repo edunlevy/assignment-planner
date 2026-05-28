@@ -105,10 +105,11 @@ export default function AuthScreen() {
     clearMessages();
     setLoading(true);
     try {
-      await signInWithApple();
+      const result = await signInWithApple();
+      if (result === null) return; // user cancelled — stay silent
       // onAuthStateChange in App.js fires SIGNED_IN and unmounts this screen
     } catch (e) {
-      if (e.code !== 'ERR_REQUEST_CANCELED') setError(e.message);
+      setError(e.message);
     } finally {
       setLoading(false);
     }

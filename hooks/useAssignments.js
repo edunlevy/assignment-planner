@@ -522,7 +522,13 @@ export function useAssignments(userId) {
               if (prev.some(a => a.id === id)) {
                 return prev.map(a => a.id === id ? withReminders : a);
               }
-              return event === 'INSERT' ? [withReminders, ...prev] : prev;
+              // Row not in local state: always add it, regardless of event type.
+              // An UPDATE can arrive for a row we haven't seen when this device
+              // came online after the original INSERT was delivered (e.g. the
+              // channel subscription missed the INSERT event). Treating the
+              // upsert as authoritative ensures the row is visible and its
+              // reminders — already scheduled above — are reachable.
+              return [withReminders, ...prev];
             });
           });
         }

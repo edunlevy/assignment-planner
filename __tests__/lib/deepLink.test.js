@@ -55,6 +55,12 @@ describe('parseAuthRedirect', () => {
     expect(out.state).toBe('s1');
   });
 
+  test('ignores a bare ? with no query string', () => {
+    // qIdx found, but qs === '' → the `if (qs)` branch is false → skip parse
+    expect(parseAuthRedirect('assignmentplanner://x?')).toEqual({});
+    expect(parseAuthRedirect('assignmentplanner://x?#type=recovery')).toEqual({ type: 'recovery' });
+  });
+
   test('returns {} when URLSearchParams would throw on a pathological input', () => {
     // Force the catch branch (line 32) by passing something that the URL
     // parsing code might choke on. In practice URLSearchParams is very

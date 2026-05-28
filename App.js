@@ -1,4 +1,3 @@
-import { differenceInCalendarDays, parseISO } from 'date-fns';
 import * as Linking from 'expo-linking';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo, useState } from 'react';
@@ -11,9 +10,12 @@ import {
 } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import AssignmentFormModal, { COMPLEXITY_OPTIONS, STATUS_COLORS, STATUS_LABELS } from './components/AssignmentFormModal';
-import { pickWorkOnNext, sortForList } from './lib/ordering';
+import AssignmentFormModal from './components/AssignmentFormModal';
+import AssignmentRow from './components/AssignmentRow';
 import CalendarView from './components/CalendarView';
+import EmptyState from './components/EmptyState';
+import WorkOnNextCard from './components/WorkOnNextCard';
+import { pickWorkOnNext, sortForList } from './lib/ordering';
 import { useAssignments } from './hooks/useAssignments';
 import { parseAuthRedirect } from './lib/deepLink';
 import { buildWeeklySeries } from './lib/recurring';
@@ -22,131 +24,6 @@ import { uuidv4 } from './lib/uuid';
 import AuthScreen from './screens/AuthScreen';
 import ProfileModal from './screens/ProfileModal';
 import ResetPasswordModal from './screens/ResetPasswordModal';
-
-// Importance bar: 5 filled segments, color shifts from light to deep blue
-const IMPORTANCE_SEGMENT_COLORS = ['#BFC8FF', '#91A7FF', '#5C7CFA', '#3B5BDB', '#1E3A8A'];
-
-// Lookup: complexity key → display label. Falls back to "Medium" for any
-// row that pre-dates the Phase E migration (sanitizeAssignment defaults to
-// 'medium' anyway, so this is belt-and-suspenders).
-function complexityLabel(key) {
-  const found = COMPLEXITY_OPTIONS.find(o => o.key === key);
-  return found ? found.label : 'Medium';
-}
-
-function dueDateLabel(dueDateStr) {
-  try {
-    const days = differenceInCalendarDays(parseISO(dueDateStr), new Date());
-    if (days < 0) return { text: 'Overdue', urgent: true };
-    if (days === 0) return { text: 'Due today', urgent: true };
-    if (days === 1) return { text: 'Due tomorrow', urgent: true };
-    if (days <= 7) return { text: `Due in ${days} days`, urgent: false };
-    return { text: `Due ${dueDateStr}`, urgent: false };
-  } catch {
-    return { text: `Due ${dueDateStr}`, urgent: false };
-  }
-}
-
-function ImportanceBar({ value }) {
-  return (
-    <View className="flex-row gap-1 mt-1.5">
-      {[1, 2, 3, 4, 5].map(n => (
-        <View
-          key={n}
-          className="h-1.5 flex-1 rounded-full"
-          style={{ backgroundColor: n <= value ? IMPORTANCE_SEGMENT_COLORS[n - 1] : '#E8ECFF' }}
-        />
-      ))}
-    </View>
-  );
-}
-
-function WorkOnNextCard({ assignment }) {
-  const label = dueDateLabel(assignment.dueDate);
-  return (
-    <View className="mx-4 mb-3 rounded-2xl overflow-hidden" style={{ backgroundColor: '#1E3A8A' }}>
-      <View className="px-4 pt-4 pb-1">
-        <Text className="text-xs font-bold tracking-widest uppercase" style={{ color: '#93C5FD' }}>
-          Work on next
-        </Text>
-        <Text className="text-xs" style={{ color: 'rgba(147,197,253,0.7)' }}>
-          Prioritised by urgency &amp; complexity
-        </Text>
-      </View>
-      <View className="px-4 pb-4">
-        <Text className="text-lg font-bold text-white mt-0.5">{assignment.title}</Text>
-        <Text className="text-sm mt-0.5" style={{ color: '#BFDBFE' }}>{assignment.course}</Text>
-        <View className="flex-row items-center mt-2 gap-2 flex-wrap">
-          <View
-            className="rounded-full px-2.5 py-0.5"
-            style={{ backgroundColor: label.urgent ? '#EF4444' : 'rgba(255,255,255,0.15)' }}
-          >
-            <Text className="text-xs font-semibold text-white">{label.text}</Text>
-          </View>
-          <View
-            className="rounded-full px-2.5 py-0.5"
-            style={{ backgroundColor: 'rgba(255,255,255,0.15)' }}
-          >
-            <Text className="text-xs font-semibold text-white">
-              {complexityLabel(assignment.complexity)}
-            </Text>
-          </View>
-          <Text className="text-xs" style={{ color: '#BFDBFE' }}>
-            Importance {assignment.importance}/5
-          </Text>
-        </View>
-      </View>
-    </View>
-  );
-}
-
-function AssignmentRow({ item, onPress }) {
-  const isCompleted = item.status === 'completed';
-  const label = dueDateLabel(item.dueDate);
-  return (
-    <Pressable
-      style={[styles.card, isCompleted && styles.cardCompleted]}
-      onPress={onPress}
-    >
-      <View style={styles.cardBody}>
-        <Text style={[styles.cardTitle, isCompleted && styles.cardTitleCompleted]}>
-          {item.title}
-        </Text>
-        <Text style={styles.cardCourse}>{item.course}</Text>
-        <View style={styles.cardMetaRow}>
-          <Text style={[styles.cardDue, label.urgent && !isCompleted && styles.cardDueUrgent]}>
-            {label.text}
-          </Text>
-          <View style={styles.complexityChip}>
-            <Text style={styles.complexityChipText}>
-              {complexityLabel(item.complexity)}
-            </Text>
-          </View>
-        </View>
-        <ImportanceBar value={item.importance} />
-      </View>
-      <View style={[styles.badge, { backgroundColor: STATUS_COLORS[item.status] }]}>
-        <Text style={styles.badgeText}>{STATUS_LABELS[item.status]}</Text>
-      </View>
-    </Pressable>
-  );
-}
-
-function EmptyState() {
-  return (
-    <View className="flex-1 items-center justify-center px-8 pt-16">
-      <Text className="text-5xl mb-4">📋</Text>
-      <Text className="text-lg font-bold text-center" style={{ color: '#1A1A2E' }}>
-        All clear!
-      </Text>
-      <Text className="text-sm text-center mt-1" style={{ color: '#888' }}>
-        No assignments yet. Tap the{' '}
-        <Text className="font-bold" style={{ color: '#3B5BDB' }}>+</Text>
-        {' '}button to add your first one.
-      </Text>
-    </View>
-  );
-}
 
 // Top-level session bootstrap + assignment list view.
 // All assignment lifecycle logic lives in useAssignments; the form lives in AssignmentFormModal.
@@ -506,81 +383,6 @@ const styles = StyleSheet.create({
   },
   listEmpty: {
     flex: 1,
-  },
-
-  card: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 6,
-    elevation: 2,
-  },
-  cardCompleted: {
-    opacity: 0.5,
-  },
-  cardBody: {
-    flex: 1,
-  },
-  cardTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1A1A2E',
-  },
-  cardTitleCompleted: {
-    textDecorationLine: 'line-through',
-    color: '#888',
-  },
-  cardCourse: {
-    fontSize: 13,
-    color: '#3B5BDB',
-    marginTop: 2,
-    fontWeight: '500',
-  },
-  cardMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 4,
-    gap: 8,
-    flexWrap: 'wrap',
-  },
-  cardDue: {
-    fontSize: 12,
-    color: '#888',
-  },
-  cardDueUrgent: {
-    color: '#EF4444',
-    fontWeight: '600',
-  },
-  complexityChip: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 10,
-    backgroundColor: '#EEF2FF',
-    borderWidth: 1,
-    borderColor: '#DDE2FF',
-  },
-  complexityChipText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#3B5BDB',
-  },
-
-  badge: {
-    borderRadius: 20,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    marginLeft: 10,
-  },
-  badgeText: {
-    fontSize: 11,
-    color: '#FFFFFF',
-    fontWeight: '600',
   },
 
   fab: {
