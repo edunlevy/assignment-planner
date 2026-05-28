@@ -51,3 +51,5 @@ coverage/
 
 # Local-only marketing files (demo credentials, secrets) — never commit
 marketing/*.local.md
+.jest-cache/
+.vitest-cache/

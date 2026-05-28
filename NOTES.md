@@ -3,20 +3,27 @@
 ## Auth redirect URLs (Supabase dashboard — one-time setup)
 
 The password-reset and email-confirmation flows use hosted redirect pages on
-GitHub Pages to bridge the gap between Supabase's `https://` email links and
-the app's `assignmentplanner://` deep-link scheme.
+`ondeadline.app` (Bluehost) to bridge the gap between Supabase's `https://`
+email links and the app's `assignmentplanner://` deep-link scheme.
+
+The three files to upload are in `web-redirect/`:
+- `reset-password.html`  →  `https://ondeadline.app/reset-password.html`
+- `confirm-email.html`   →  `https://ondeadline.app/confirm-email.html`
+- `styles.css`           →  `https://ondeadline.app/styles.css`
+
+See "Deploying web-redirect pages (Bluehost)" below for upload steps.
 
 **Add both of these to Supabase → Authentication → URL Configuration → Redirect URLs:**
 
 ```
-https://edunlevy.github.io/assignment-planner/reset-password.html
-https://edunlevy.github.io/assignment-planner/confirm-email.html
+https://ondeadline.app/reset-password.html
+https://ondeadline.app/confirm-email.html
 ```
 
 A wildcard entry also works and is easier to maintain:
 
 ```
-https://edunlevy.github.io/**
+https://ondeadline.app/**
 ```
 
 Without this, Supabase ignores the `redirectTo` parameter and the email link
@@ -25,8 +32,35 @@ either points to a broken URL or is stripped entirely.
 **Site URL** (Supabase → Authentication → URL Configuration → Site URL):
 
 ```
-https://edunlevy.github.io/assignment-planner
+https://ondeadline.app
 ```
+
+---
+
+## Deploying web-redirect pages (Bluehost)
+
+The `web-redirect/` folder in this repo contains three static files that need
+to be uploaded to the Bluehost server whenever they change.
+
+### via cPanel File Manager (easiest)
+
+1. Log into cPanel — usually at `https://ondeadline.app/cpanel` or the URL
+   Bluehost emailed you when you set up hosting
+2. Click **File Manager**
+3. Navigate to **public_html/** (this is the web root for `ondeadline.app`)
+4. Click **Upload** in the toolbar
+5. Upload all three files from your local `web-redirect/` folder:
+   - `reset-password.html`
+   - `confirm-email.html`
+   - `styles.css`
+6. After uploading, verify at `https://ondeadline.app/reset-password.html`
+   — you should see the "Reset Your Password" page
+
+### via FTP (alternative)
+
+Bluehost FTP credentials are in cPanel → **FTP Accounts**. Use any FTP
+client (FileZilla is free). Connect, navigate to `public_html/`, and drag
+the three files from `web-redirect/` into that folder.
 
 ---
 

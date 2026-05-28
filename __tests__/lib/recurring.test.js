@@ -78,6 +78,22 @@ describe('buildWeeklySeries', () => {
     expect(drafts.length).toBe(MAX_WEEKLY_OCCURRENCES);
   });
 
+  test('propagates complexity (and any other base field) to every occurrence', () => {
+    // Regression: handleCreateRecurring in App.js once omitted complexity from
+    // the base object, causing every occurrence in a recurring series to fall
+    // back to the DB default ('medium') regardless of what the user selected.
+    const drafts = buildWeeklySeries({
+      startISO: '2026-01-05',
+      untilISO: '2026-01-19',
+      base: { title: 'Essay', course: 'ENGL', importance: 4, complexity: 'long', status: 'not_started' },
+      seriesId: 's',
+    });
+    expect(drafts).toHaveLength(3);
+    for (const d of drafts) {
+      expect(d.complexity).toBe('long');
+    }
+  });
+
   test('crosses a DST boundary without doubling/skipping a week', () => {
     // US DST 2026 begins March 8. Start in late Feb, end in mid-March.
     const drafts = buildWeeklySeries({

@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DueDateField from './DueDateField';
-import { isValidDate } from '../hooks/useAssignments';
+import { isValidDate } from '../lib/assignment';
 import { countWeeklyOccurrences, MAX_WEEKLY_OCCURRENCES } from '../lib/recurring';
 
 const STATUS_LABELS = {
@@ -37,8 +37,17 @@ const IMPORTANCE_HINTS = {
   5: 'Critical — do this first!',
 };
 
+// Complexity / length gauge. Order matches the picker (Short → Medium → Long).
+// Numeric weights live in lib/ordering.js — this file only owns labels + UI.
+const COMPLEXITY_OPTIONS = [
+  { key: 'short',  label: 'Short',  hint: '< 1 hour' },
+  { key: 'medium', label: 'Medium', hint: '1–2 hours' },
+  { key: 'long',   label: 'Long',   hint: '3+ hours' },
+];
+
 const EMPTY_FORM = {
   title: '', course: '', dueDate: '', importance: 3, status: 'not_started',
+  complexity: 'medium',
   repeatWeekly: false, repeatUntil: '',
 };
 
@@ -52,6 +61,7 @@ function formFor(item) {
     dueDate: item.dueDate,
     importance: item.importance,
     status: item.status,
+    complexity: item.complexity ?? 'medium',
     repeatWeekly: false,
     repeatUntil: '',
   };
@@ -128,6 +138,7 @@ export default function AssignmentFormModal({
       course: form.course.trim(),
       dueDate: form.dueDate.trim(),
       importance: form.importance,
+      complexity: form.complexity,
     };
 
     if (isEditing) {
@@ -228,6 +239,35 @@ export default function AssignmentFormModal({
             </View>
             <Text style={styles.importanceHint}>{IMPORTANCE_HINTS[form.importance]}</Text>
 
+            <Text style={styles.label}>Complexity / length</Text>
+            <View style={styles.statusRow}>
+              {COMPLEXITY_OPTIONS.map(({ key, label }) => (
+                <Pressable
+                  key={key}
+                  style={[
+                    styles.statusButton,
+                    form.complexity === key && {
+                      backgroundColor: '#3B5BDB',
+                      borderColor: '#3B5BDB',
+                    },
+                  ]}
+                  onPress={() => setForm(f => ({ ...f, complexity: key }))}
+                >
+                  <Text
+                    style={[
+                      styles.statusButtonText,
+                      form.complexity === key && styles.statusButtonTextSelected,
+                    ]}
+                  >
+                    {label}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+            <Text style={styles.importanceHint}>
+              {COMPLEXITY_OPTIONS.find(o => o.key === form.complexity)?.hint}
+            </Text>
+
             {!isEditing && (
               <>
                 <Pressable
@@ -323,7 +363,7 @@ export default function AssignmentFormModal({
   );
 }
 
-export { STATUS_LABELS, STATUS_COLORS };
+export { STATUS_LABELS, STATUS_COLORS, COMPLEXITY_OPTIONS };
 
 const styles = StyleSheet.create({
   modalSheet: {

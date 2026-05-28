@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ActivityIndicator, Alert, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { cancelAllReminders, saveReminderMap } from '../lib/notifications';
 import { supabase } from '../lib/supabase';
 
@@ -23,6 +24,9 @@ export default function ProfileModal({ visible, onClose, email, userId }) {
         // Await the map write so onClose can't race ahead of the disk flush.
         await cancelAllReminders();
         if (userId) await saveReminderMap(userId, {});
+        // Best-effort Google SDK sign-out so the account picker is shown
+        // fresh next time rather than silently reusing the cached session.
+        await GoogleSignin.signOut().catch(() => {});
         onClose();
       }
     } finally {
@@ -54,6 +58,8 @@ export default function ProfileModal({ visible, onClose, email, userId }) {
       // Deletion succeeded — now safe to clean up local reminders.
       await cancelAllReminders();
       if (userId) await saveReminderMap(userId, {});
+      // Best-effort Google SDK sign-out for the same reason as handleSignOut.
+      await GoogleSignin.signOut().catch(() => {});
 
       await supabase.auth.signOut();
       onClose();

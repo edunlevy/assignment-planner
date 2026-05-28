@@ -51,7 +51,7 @@ export default function AuthScreen() {
       // Email links must be https:// so they work from any browser (especially desktop Gmail).
       // The hosted page reads Supabase's recovery token from the URL fragment and forwards
       // to assignmentplanner://reset-password#... which the app's deep-link handler picks up.
-      const redirectTo = 'https://edunlevy.github.io/assignment-planner/reset-password.html';
+      const redirectTo = 'https://ondeadline.app/reset-password.html';
       const { error: err } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo });
       if (err) {
         setError(err.message);
@@ -80,7 +80,7 @@ export default function AuthScreen() {
       } else {
         // Email links must be https:// so they survive Mail/Gmail link rewriting.
         // The hosted page forwards into assignmentplanner:// for the installed app.
-        const emailRedirectTo = 'https://edunlevy.github.io/assignment-planner/confirm-email.html';
+        const emailRedirectTo = 'https://ondeadline.app/confirm-email.html';
         const { error: err } = await supabase.auth.signUp({
           email: email.trim(),
           password,

@@ -1,5 +1,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { AppState } from 'react-native';
+import {
+  VALID_STATUSES,
+  isValidDate,
+  rowsMatch,
+  sanitizeAssignment,
+} from '../lib/assignment';
 import {
   dbDelete,
   dbInsert,
@@ -10,6 +17,7 @@ import {
 } from '../lib/assignmentsDb';
 import {
   cancelReminders,
+  detectTimezoneChanged,
   loadReminderIdsFor,
   loadReminderMap,
   mergeReminderIds,
@@ -18,6 +26,7 @@ import {
   saveReminderMap,
   scheduleReminders,
   scheduleRemindersBatch,
+  storeDeviceTimezone,
 } from '../lib/notifications';
 import { supabase } from '../lib/supabase';
 import { uuidv4 } from '../lib/uuid';
@@ -26,45 +35,6 @@ import { uuidv4 } from '../lib/uuid';
 // One key per userId so accounts don't cross-contaminate.
 function storageKey(userId) {
   return `assignments_${userId}`;
-}
-
-const VALID_STATUSES = new Set(['not_started', 'in_progress', 'completed']);
-
-function isValidDate(str) {
-  if (typeof str !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(str)) return false;
-  const [y, m, d] = str.split('-').map(Number);
-  if (m < 1 || m > 12 || d < 1 || d > 31) return false;
-  const date = new Date(y, m - 1, d);
-  return date.getFullYear() === y && date.getMonth() === m - 1 && date.getDate() === d;
-}
-
-// Structural equality on the mapped assignment fields. Used to decide
-// whether a realtime UPDATE payload is the echo of our own write (matches)
-// or a real concurrent update from another device (differs). reminderIds
-// is intentionally excluded — it's device-local and not in the DB row.
-function rowsMatch(a, b) {
-  if (!a || !b) return false;
-  return a.id === b.id
-    && a.title === b.title
-    && a.course === b.course
-    && a.dueDate === b.dueDate
-    && a.importance === b.importance
-    && a.status === b.status
-    && (a.seriesId ?? null) === (b.seriesId ?? null);
-}
-
-function sanitizeAssignment(a) {
-  if (!a || typeof a !== 'object') return null;
-  if (!a.id || !a.title || !a.course || !a.dueDate) return null;
-  if (!isValidDate(a.dueDate)) return null;
-  return {
-    ...a,
-    importance: (Number.isInteger(a.importance) && a.importance >= 1 && a.importance <= 5)
-      ? a.importance
-      : 3,
-    status: VALID_STATUSES.has(a.status) ? a.status : 'not_started',
-    reminderIds: Array.isArray(a.reminderIds) ? a.reminderIds : [],
-  };
 }
 
 // Owns the full assignment lifecycle for a logged-in user:
@@ -238,6 +208,10 @@ export function useAssignments(userId) {
 
       // Fetch and reminder scheduling are split into two try blocks so a
       // notification permission/scheduling failure can't mask a successful fetch.
+      // Block 1 — DB fetch + immediate state commit.
+      // Reminder work is intentionally excluded here: a permission prompt or
+      // scheduling failure must never mask a successful fetch or produce a
+      // misleading "could not reach server" banner.
       let merged;
       let reminderMap;
       try {
@@ -255,33 +229,6 @@ export function useAssignments(userId) {
         reminderMap = loadedMap;
         merged = mergeReminderIds(fresh, reminderMap);
 
-        // Reschedule reminders for incomplete assignments that have none
-        // on disk (covers the case where reminders were cleared on sign-out).
-        const updatedMap = { ...reminderMap };
-        // Schedule in a single batch against one shared iOS slot budget so
-        // concurrent schedules can't collectively overrun the 64-pending cap.
-        const needsScheduling = merged.filter(
-          a => a.status !== 'completed' && a.reminderIds.length === 0
-        );
-        const newIdsList = await scheduleRemindersBatch(needsScheduling);
-        const newIdsById = new Map(
-          needsScheduling.map((a, i) => [a.id, newIdsList[i]])
-        );
-        const withReminders = merged.map(a => {
-          if (!newIdsById.has(a.id)) return a;
-          const ids = newIdsById.get(a.id);
-          if (ids.length > 0) updatedMap[a.id] = ids;
-          return { ...a, reminderIds: ids };
-        });
-        if (cancelled) return;
-        if (thisFetch < dataVersionRef.current) {
-          setLoaded(true);
-          return;
-        }
-
-        if (!reminderMapsEqual(updatedMap, reminderMap)) {
-          await saveReminderMap(userId, updatedMap);
-        }
         dataVersionRef.current = thisFetch;
         setAssignments(merged);
         AsyncStorage.setItem(storageKey(userId), JSON.stringify(merged))
@@ -294,21 +241,77 @@ export function useAssignments(userId) {
         if (!cancelled) setLoaded(true);
       }
 
-      // Reschedule reminders for incomplete assignments missing IDs.
-      // Isolated so failures here never block or misreport the fetch above.
+      // Block 2 — best-effort reminder rescheduling.
+      // Runs only when the fetch succeeded (merged is set). Isolated so any
+      // failure (permission denied, iOS cap hit, AsyncStorage error) is
+      // swallowed here and never surfaces as a sync/fetch error.
+      // Asks for permission here so the OS prompt appears after the user has
+      // seen their assignments. Subsequent calls return the cached status
+      // instantly — no repeated prompts.
       if (!cancelled && merged) {
         try {
+          // Phase A — stale-reminder cleanup (no OS permission required).
+          // Cancellation is the inverse of scheduling and must happen even if
+          // the user has denied notification permission. Running it before
+          // requestNotificationPermission() ensures a slow or failed permission
+          // prompt cannot block the cleanup of deleted/completed rows.
+          const updatedMap = { ...reminderMap };
+          const freshIds = new Set(merged.map(a => a.id));
+
+          // 1. Rows in the map but absent from the fresh fetch → deleted remotely.
+          for (const id of Object.keys(updatedMap)) {
+            if (!freshIds.has(id)) {
+              await cancelReminders(updatedMap[id]);
+              delete updatedMap[id];
+            }
+          }
+          if (cancelled) return;
+
+          // 2. Rows now completed that still have reminder IDs in the map.
+          for (const a of merged) {
+            if (a.status === 'completed' && updatedMap[a.id]) {
+              await cancelReminders(updatedMap[a.id]);
+              delete updatedMap[a.id];
+            }
+          }
+          if (cancelled) return;
+
+          // Rebuild merged so completed rows carry reminderIds: [] going forward.
+          const reconciled = merged.map(a =>
+            a.status === 'completed' && !updatedMap[a.id]
+              ? { ...a, reminderIds: [] }
+              : a
+          );
+
+          // Flush cleanup to disk now so a crash between here and Phase B
+          // doesn't leave stale IDs in the map.
+          if (!reminderMapsEqual(updatedMap, reminderMap)) {
+            await saveReminderMap(userId, updatedMap);
+          }
+          if (cancelled) return;
+
+          // Phase B — schedule new reminders (requires OS permission).
+          // Gated separately so a denied/erroring permission prompt can never
+          // prevent Phase A cleanup from completing.
+          // Asks for permission after data is rendered; iOS caches the answer
+          // so subsequent calls return immediately without prompting again.
           await requestNotificationPermission();
 
-          const updatedMap = { ...reminderMap };
-          const withReminders = await Promise.all(
-            merged.map(async a => {
-              if (a.status === 'completed' || a.reminderIds.length > 0) return a;
-              const ids = await scheduleReminders(a);
-              if (ids.length > 0) updatedMap[a.id] = ids;
-              return { ...a, reminderIds: ids };
-            })
+          // Schedule in a single batch against one shared iOS slot budget so
+          // concurrent schedules can't collectively overrun the 64-pending cap.
+          const needsScheduling = reconciled.filter(
+            a => a.status !== 'completed' && a.reminderIds.length === 0
           );
+          const newIdsList = await scheduleRemindersBatch(needsScheduling);
+          const newIdsById = new Map(
+            needsScheduling.map((a, i) => [a.id, newIdsList[i]])
+          );
+          const withReminders = reconciled.map(a => {
+            if (!newIdsById.has(a.id)) return a;
+            const ids = newIdsById.get(a.id);
+            if (ids.length > 0) updatedMap[a.id] = ids;
+            return { ...a, reminderIds: ids };
+          });
           if (cancelled || thisFetch < dataVersionRef.current) return;
 
           if (!reminderMapsEqual(updatedMap, reminderMap)) {
@@ -317,14 +320,110 @@ export function useAssignments(userId) {
           setAssignments(withReminders);
           AsyncStorage.setItem(storageKey(userId), JSON.stringify(withReminders))
             .catch(() => {});
+
+          // Seed the stored device TZ now that we have a known-good schedule.
+          // The AppState listener compares against this on foreground.
+          await storeDeviceTimezone(userId);
         } catch {
-          // Permission or scheduling failed — assignments are already rendered
+          // Permission or scheduling failed — assignments are already rendered.
         }
       }
     })();
 
     return () => { cancelled = true; };
   }, [userId]);
+
+  // Keep a ref to the latest assignments list so the AppState listener can
+  // read the current state without being recreated on every change. Using a
+  // ref (instead of a dep) avoids tearing down + re-subscribing the OS
+  // listener every time a user types in the form.
+  const assignmentsRef = useRef(assignments);
+  useEffect(() => { assignmentsRef.current = assignments; }, [assignments]);
+
+  // --- AppState — TZ-change reschedule -------------------------------------
+  // When the app foregrounds, compare device TZ to the persisted value. If
+  // it changed (e.g. user travelled, manual settings change), cancel and
+  // reschedule every incomplete-assignment reminder against ONE shared iOS
+  // slot budget. CALENDAR triggers should self-adjust on iOS, but this
+  // belt-and-suspenders pass guarantees correctness on Android (AlarmManager
+  // behaviour is less reliable across TZ changes) and acts as a recovery
+  // path if the OS dropped any reminders while the app was backgrounded.
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+
+    const sub = AppState.addEventListener('change', async nextState => {
+      if (nextState !== 'active') return;
+      if (cancelled) return;
+      try {
+        const changed = await detectTimezoneChanged(userId);
+        if (cancelled || !changed) return;
+
+        const incomplete = assignmentsRef.current
+          .filter(a => a.status !== 'completed');
+
+        // No active reminders to fix; just refresh the stored TZ so the next
+        // change is detected against the new baseline.
+        if (incomplete.length === 0) {
+          await storeDeviceTimezone(userId);
+          return;
+        }
+
+        // Cancel all currently-scheduled reminders for incomplete rows.
+        // Read the on-disk map as the canonical source (matches the
+        // CRUD path's cancel-from-disk discipline).
+        const map = await loadReminderMap(userId);
+        if (cancelled) return;
+        for (const a of incomplete) {
+          const ids = map[a.id] ?? [];
+          if (ids.length > 0) await cancelReminders(ids);
+          if (cancelled) return;
+        }
+
+        // Reschedule with one shared budget (the batch helper handles it).
+        const newIdsList = await scheduleRemindersBatch(incomplete);
+        if (cancelled) {
+          // Clean up just-scheduled IDs if we got torn down mid-flight so
+          // we don't leak OS notifications.
+          for (const ids of newIdsList) {
+            if (Array.isArray(ids) && ids.length > 0) {
+              await cancelReminders(ids).catch(() => {});
+            }
+          }
+          return;
+        }
+
+        // Update the map: set new IDs where present, drop entries that came
+        // back empty (e.g. iOS cap exhausted or the trigger is now past).
+        const newMap = { ...map };
+        incomplete.forEach((a, i) => {
+          const ids = newIdsList[i] ?? [];
+          if (ids.length > 0) newMap[a.id] = ids;
+          else delete newMap[a.id];
+        });
+        if (!reminderMapsEqual(newMap, map)) {
+          await saveReminderMap(userId, newMap);
+        }
+        if (cancelled) return;
+
+        // Reflect new reminder IDs in state (and cache).
+        const idsById = new Map(incomplete.map((a, i) => [a.id, newIdsList[i] ?? []]));
+        commitLocal(prev => prev.map(a => (
+          idsById.has(a.id) ? { ...a, reminderIds: idsById.get(a.id) } : a
+        )));
+
+        await storeDeviceTimezone(userId);
+      } catch {
+        // Reschedule failed — assignments still render. The stored TZ is
+        // intentionally NOT updated, so we'll retry on the next foreground.
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      sub.remove();
+    };
+  }, [userId, commitLocal]);
 
   // --- Realtime sync -------------------------------------------------------
   // Subscribe to assignments-table changes filtered by user_id so a write
@@ -486,9 +585,11 @@ export function useAssignments(userId) {
         throw err;
       }
       for (const a of saved) settleSelfMutation(a.id, a);
-      const withReminders = await Promise.all(
-        saved.map(async a => ({ ...a, reminderIds: await scheduleReminders(a) }))
-      );
+      // Use the batch helper so all assignments in the series share one iOS
+      // pending-slot budget — avoids overcounting when parallel calls each
+      // read the same pending count and collectively overrun the 64-cap.
+      const reminderIdsList = await scheduleRemindersBatch(saved);
+      const withReminders = saved.map((a, i) => ({ ...a, reminderIds: reminderIdsList[i] }));
       const map = await loadReminderMap(userId);
       for (const a of withReminders) {
         if (a.reminderIds.length > 0) map[a.id] = a.reminderIds;
@@ -540,7 +641,8 @@ export function useAssignments(userId) {
       : [];
 
     const map = await loadReminderMap(userId);
-    map[id] = reminderIds;
+    if (reminderIds.length > 0) map[id] = reminderIds;
+    else delete map[id];
     await saveReminderMap(userId, map);
 
     const withReminders = { ...updated, reminderIds };
@@ -588,4 +690,5 @@ export function useAssignments(userId) {
   };
 }
 
+// Re-exported so existing callers don't need immediate import-path changes.
 export { isValidDate, sanitizeAssignment };

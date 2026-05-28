@@ -11,18 +11,28 @@ import {
 } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import AssignmentFormModal, { STATUS_COLORS, STATUS_LABELS } from './components/AssignmentFormModal';
+import AssignmentFormModal, { COMPLEXITY_OPTIONS, STATUS_COLORS, STATUS_LABELS } from './components/AssignmentFormModal';
+import { pickWorkOnNext, sortForList } from './lib/ordering';
 import CalendarView from './components/CalendarView';
 import { useAssignments } from './hooks/useAssignments';
 import { parseAuthRedirect } from './lib/deepLink';
 import { buildWeeklySeries } from './lib/recurring';
 import { supabase } from './lib/supabase';
+import { uuidv4 } from './lib/uuid';
 import AuthScreen from './screens/AuthScreen';
 import ProfileModal from './screens/ProfileModal';
 import ResetPasswordModal from './screens/ResetPasswordModal';
 
 // Importance bar: 5 filled segments, color shifts from light to deep blue
 const IMPORTANCE_SEGMENT_COLORS = ['#BFC8FF', '#91A7FF', '#5C7CFA', '#3B5BDB', '#1E3A8A'];
+
+// Lookup: complexity key → display label. Falls back to "Medium" for any
+// row that pre-dates the Phase E migration (sanitizeAssignment defaults to
+// 'medium' anyway, so this is belt-and-suspenders).
+function complexityLabel(key) {
+  const found = COMPLEXITY_OPTIONS.find(o => o.key === key);
+  return found ? found.label : 'Medium';
+}
 
 function dueDateLabel(dueDateStr) {
   try {
@@ -59,16 +69,27 @@ function WorkOnNextCard({ assignment }) {
         <Text className="text-xs font-bold tracking-widest uppercase" style={{ color: '#93C5FD' }}>
           Work on next
         </Text>
+        <Text className="text-xs" style={{ color: 'rgba(147,197,253,0.7)' }}>
+          Prioritised by urgency &amp; complexity
+        </Text>
       </View>
       <View className="px-4 pb-4">
         <Text className="text-lg font-bold text-white mt-0.5">{assignment.title}</Text>
         <Text className="text-sm mt-0.5" style={{ color: '#BFDBFE' }}>{assignment.course}</Text>
-        <View className="flex-row items-center mt-2 gap-2">
+        <View className="flex-row items-center mt-2 gap-2 flex-wrap">
           <View
             className="rounded-full px-2.5 py-0.5"
             style={{ backgroundColor: label.urgent ? '#EF4444' : 'rgba(255,255,255,0.15)' }}
           >
             <Text className="text-xs font-semibold text-white">{label.text}</Text>
+          </View>
+          <View
+            className="rounded-full px-2.5 py-0.5"
+            style={{ backgroundColor: 'rgba(255,255,255,0.15)' }}
+          >
+            <Text className="text-xs font-semibold text-white">
+              {complexityLabel(assignment.complexity)}
+            </Text>
           </View>
           <Text className="text-xs" style={{ color: '#BFDBFE' }}>
             Importance {assignment.importance}/5
@@ -92,9 +113,16 @@ function AssignmentRow({ item, onPress }) {
           {item.title}
         </Text>
         <Text style={styles.cardCourse}>{item.course}</Text>
-        <Text style={[styles.cardDue, label.urgent && !isCompleted && styles.cardDueUrgent]}>
-          {label.text}
-        </Text>
+        <View style={styles.cardMetaRow}>
+          <Text style={[styles.cardDue, label.urgent && !isCompleted && styles.cardDueUrgent]}>
+            {label.text}
+          </Text>
+          <View style={styles.complexityChip}>
+            <Text style={styles.complexityChipText}>
+              {complexityLabel(item.complexity)}
+            </Text>
+          </View>
+        </View>
         <ImportanceBar value={item.importance} />
       </View>
       <View style={[styles.badge, { backgroundColor: STATUS_COLORS[item.status] }]}>
@@ -166,15 +194,18 @@ function AppScreen() {
   useEffect(() => {
     async function handleDeepLink(url) {
       if (!url) return;
-      const isResetLink = url.includes('reset-password');
+      // Match on path segment, not substring — keeps confirm/reset branches exclusive.
+      const isResetLink = /(^|\/)reset-password(\b|\/|\?|#)/.test(url);
+      const isConfirmLink = /(^|\/)(confirm|login)(\b|\/|\?|#)/.test(url);
       const params = parseAuthRedirect(url);
 
       // PKCE flow: Supabase sends ?code= instead of fragment tokens.
-      // The URL path already scopes this to password resets, so a
-      // successful exchange always means recovery.
+      // Recovery and signup confirmation share the same exchange call; the
+      // URL path tells us which UI to surface afterward.
       if (params.code) {
         const { error } = await supabase.auth.exchangeCodeForSession(params.code);
         if (!error && isResetLink) setRecoveryMode(true);
+        // Signup-confirm: onAuthStateChange will fire SIGNED_IN; nothing else to do.
         return;
       }
 
@@ -185,6 +216,15 @@ function AppScreen() {
           refresh_token: params.refresh_token ?? '',
         });
         if (!error) setRecoveryMode(true);
+        return;
+      }
+
+      // Implicit-flow signup confirmation: tokens in the fragment, type=signup.
+      if (isConfirmLink && params.type === 'signup' && params.access_token) {
+        await supabase.auth.setSession({
+          access_token: params.access_token,
+          refresh_token: params.refresh_token ?? '',
+        });
       }
     }
     Linking.getInitialURL().then(handleDeepLink);
@@ -235,9 +275,10 @@ function AppScreen() {
           title: values.title,
           course: values.course,
           importance: values.importance,
+          complexity: values.complexity,
           status: 'not_started',
         },
-        seriesId: Date.now().toString(),
+        seriesId: uuidv4(),
       });
       return insertMany(drafts);
     });
@@ -257,23 +298,13 @@ function AppScreen() {
   }
 
   // Sorted/filtered views — memoized so they don't recompute on unrelated re-renders.
+  // Ordering logic lives in lib/ordering.js so it can be unit-tested in isolation.
   const { sorted, workOnNext, incompleteCount } = useMemo(() => {
-    const incomplete = assignments.filter(a => a.status !== 'completed');
-    const completed = assignments.filter(a => a.status === 'completed');
-    const sortedIncomplete = [...incomplete].sort((a, b) => {
-      if (a.dueDate !== b.dueDate) return a.dueDate.localeCompare(b.dueDate);
-      return b.importance - a.importance;
-    });
-    const next = incomplete.length > 0
-      ? [...incomplete].sort((a, b) => {
-          if (b.importance !== a.importance) return b.importance - a.importance;
-          return a.dueDate.localeCompare(b.dueDate);
-        })[0]
-      : null;
+    const incompleteCount = assignments.filter(a => a.status !== 'completed').length;
     return {
-      sorted: [...sortedIncomplete, ...completed],
-      workOnNext: next,
-      incompleteCount: incomplete.length,
+      sorted: sortForList(assignments),
+      workOnNext: pickWorkOnNext(assignments),
+      incompleteCount,
     };
   }, [assignments]);
 
@@ -468,31 +499,6 @@ const styles = StyleSheet.create({
     color: '#3B5BDB',
   },
 
-  segmented: {
-    flexDirection: 'row',
-    marginTop: 16,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    borderRadius: 10,
-    padding: 3,
-  },
-  segment: {
-    flex: 1,
-    paddingVertical: 8,
-    alignItems: 'center',
-    borderRadius: 8,
-  },
-  segmentActive: {
-    backgroundColor: '#FFFFFF',
-  },
-  segmentText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#BFC8FF',
-  },
-  segmentTextActive: {
-    color: '#3B5BDB',
-  },
-
   list: {
     paddingTop: 16,
     paddingHorizontal: 16,
@@ -536,14 +542,33 @@ const styles = StyleSheet.create({
     marginTop: 2,
     fontWeight: '500',
   },
+  cardMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+    gap: 8,
+    flexWrap: 'wrap',
+  },
   cardDue: {
     fontSize: 12,
     color: '#888',
-    marginTop: 4,
   },
   cardDueUrgent: {
     color: '#EF4444',
     fontWeight: '600',
+  },
+  complexityChip: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+    backgroundColor: '#EEF2FF',
+    borderWidth: 1,
+    borderColor: '#DDE2FF',
+  },
+  complexityChipText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#3B5BDB',
   },
 
   badge: {

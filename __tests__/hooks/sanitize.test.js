@@ -1,4 +1,4 @@
-import { isValidDate, sanitizeAssignment } from '../../hooks/useAssignments';
+import { isValidDate, sanitizeAssignment } from '../../lib/assignment';
 
 describe('isValidDate', () => {
   test('accepts a well-formed YYYY-MM-DD', () => {
@@ -47,6 +47,7 @@ describe('sanitizeAssignment', () => {
       dueDate: '2026-06-01',
       importance: 3,
       status: 'not_started',
+      complexity: 'medium',
       reminderIds: [],
     });
   });

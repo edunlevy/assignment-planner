@@ -107,6 +107,17 @@ describe('dbFetch', () => {
   });
 });
 
+describe('fromDb — complexity field', () => {
+  test('maps complexity from the DB row', () => {
+    const row = {
+      id: 'r1', title: 't', class_name: 'c', due_date: '2026-01-01',
+      importance: 3, status: 'not_started', series_id: null,
+      complexity: 'long',
+    };
+    expect(fromDb(row).complexity).toBe('long');
+  });
+});
+
 describe('dbInsert', () => {
   test('passes mapped row + user_id and returns mapped row', async () => {
     const c = chainResolving({
@@ -117,6 +128,7 @@ describe('dbInsert', () => {
         due_date: '2026-02-02',
         importance: 3,
         status: 'not_started',
+        complexity: 'medium',
         series_id: null,
       },
       single: true,
@@ -124,7 +136,7 @@ describe('dbInsert', () => {
     supabase.from.mockReturnValueOnce(c);
 
     const result = await dbInsert(
-      { title: 't', course: 'c', dueDate: '2026-02-02', importance: 3, status: 'not_started' },
+      { title: 't', course: 'c', dueDate: '2026-02-02', importance: 3, status: 'not_started', complexity: 'medium' },
       'user-1'
     );
 
@@ -136,13 +148,46 @@ describe('dbInsert', () => {
         due_date: '2026-02-02',
         importance: 3,
         status: 'not_started',
+        complexity: 'medium',
         series_id: null,
       })
     );
     expect(result.id).toBe('new-id');
     expect(result.course).toBe('c');
+    expect(result.complexity).toBe('medium');
   });
 
+  test('passes through a client-supplied id in the insert payload', async () => {
+    // Covers the `if (a.id !== undefined) out.id = a.id` branch in toDb.
+    const c = chainResolving({
+      data: {
+        id: 'client-uuid',
+        title: 't', class_name: 'c', due_date: '2026-02-02',
+        importance: 3, status: 'not_started', complexity: 'short', series_id: null,
+      },
+      single: true,
+    });
+    supabase.from.mockReturnValueOnce(c);
+
+    await dbInsert(
+      { id: 'client-uuid', title: 't', course: 'c', dueDate: '2026-02-02',
+        importance: 3, status: 'not_started', complexity: 'short' },
+      'user-1'
+    );
+
+    expect(c.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'client-uuid', user_id: 'user-1' })
+    );
+  });
+
+  test('throws when Supabase returns an error', async () => {
+    supabase.from.mockReturnValueOnce(
+      chainResolving({ error: { message: 'insert failed' }, single: true })
+    );
+    await expect(
+      dbInsert({ title: 't', course: 'c', dueDate: '2026-02-02', importance: 3, status: 'not_started' }, 'user-1')
+    ).rejects.toEqual({ message: 'insert failed' });
+  });
 });
 
 describe('dbInsertMany', () => {
@@ -183,6 +228,15 @@ describe('dbInsertMany', () => {
       ])
     );
     expect(result.map(r => r.id)).toEqual(['r1', 'r2']);
+  });
+
+  test('throws when Supabase returns an error', async () => {
+    supabase.from.mockReturnValueOnce(
+      chainResolving({ error: { message: 'batch insert failed' } })
+    );
+    await expect(
+      dbInsertMany([{ title: 't', course: 'c', dueDate: '2026-03-01' }], 'user-1')
+    ).rejects.toEqual({ message: 'batch insert failed' });
   });
 });
 
