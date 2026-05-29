@@ -35,50 +35,57 @@ describe('COMPLEXITY_BUFFER', () => {
   });
 });
 
+// No-time rows use a 23:59 fallback fraction, same as sortForList, so that
+// a no-time assignment never incorrectly surfaces ahead of an earlier explicit
+// time on the same calendar day.
+const NO_TIME_F = (23 * 60 + 59) / (24 * 60); // ≈ 0.9993
+
 // ---------------------------------------------------------------------------
 // adjustedDaysUntilDue
 // ---------------------------------------------------------------------------
 describe('adjustedDaysUntilDue', () => {
-  test('short — no buffer: adjusted days equals raw days', () => {
+  test('short — no buffer: adjusted is raw days + 23:59 fraction', () => {
     const a = make({ dueDate: '2026-06-04', complexity: 'short' });
-    // raw = 3 days, buffer = 0 → adjusted = 3
-    expect(adjustedDaysUntilDue(a, TODAY)).toBe(3);
+    // raw = 3, buffer = 0, no-time fraction ≈ 0.9993 → adjusted ≈ 3.9993
+    expect(adjustedDaysUntilDue(a, TODAY)).toBe(3 + NO_TIME_F);
   });
 
   test('medium — 1-day buffer', () => {
     const a = make({ dueDate: '2026-06-04', complexity: 'medium' });
-    // raw = 3, buffer = 1 → adjusted = 2
-    expect(adjustedDaysUntilDue(a, TODAY)).toBe(2);
+    // raw = 3, buffer = 1 → adjusted ≈ 2.9993
+    expect(adjustedDaysUntilDue(a, TODAY)).toBe(2 + NO_TIME_F);
   });
 
   test('long — 2-day buffer', () => {
     const a = make({ dueDate: '2026-06-04', complexity: 'long' });
-    // raw = 3, buffer = 2 → adjusted = 1
-    expect(adjustedDaysUntilDue(a, TODAY)).toBe(1);
+    // raw = 3, buffer = 2 → adjusted ≈ 1.9993
+    expect(adjustedDaysUntilDue(a, TODAY)).toBe(1 + NO_TIME_F);
   });
 
   test('overdue assignment returns a negative adjusted value', () => {
     const a = make({ dueDate: '2026-05-28', complexity: 'medium' });
-    // raw = -4, buffer = 1 → adjusted = -5
-    expect(adjustedDaysUntilDue(a, TODAY)).toBe(-5);
+    // raw = -4, buffer = 1 → adjusted ≈ -5 + 0.9993 = -4.0007
+    expect(adjustedDaysUntilDue(a, TODAY)).toBe(-5 + NO_TIME_F);
   });
 
-  test('due today with medium complexity returns -1', () => {
+  test('due today with medium complexity — buffer of 1 pulls it below zero', () => {
     const a = make({ dueDate: '2026-06-01', complexity: 'medium' });
-    // raw = 0, buffer = 1 → adjusted = -1
-    expect(adjustedDaysUntilDue(a, TODAY)).toBe(-1);
+    // raw = 0, buffer = 1 → adjusted ≈ -1 + 0.9993 = -0.0007
+    expect(adjustedDaysUntilDue(a, TODAY)).toBe(-1 + NO_TIME_F);
   });
 
   test('missing complexity defaults to medium buffer (pre-migration compat)', () => {
     const a = make({ dueDate: '2026-06-04' });
     delete a.complexity;
-    // same as medium: raw = 3, buffer = 1 → adjusted = 2
-    expect(adjustedDaysUntilDue(a, TODAY)).toBe(2);
+    // same as medium: raw = 3, buffer = 1 → adjusted ≈ 2.9993
+    expect(adjustedDaysUntilDue(a, TODAY)).toBe(2 + NO_TIME_F);
   });
 
-  test('no dueTime → no fractional component (integer result, backward-compat)', () => {
-    const a = make({ dueDate: '2026-06-04', complexity: 'short' });
-    expect(Number.isInteger(adjustedDaysUntilDue(a, TODAY))).toBe(true);
+  test('no-time rows use 23:59 fallback so a timed 9 AM is more urgent than no-time same day', () => {
+    const noTime = make({ dueDate: '2026-06-01', complexity: 'short' });
+    const nineAm = make({ dueDate: '2026-06-01', complexity: 'short', dueTime: '09:00' });
+    // no-time adj ≈ 0.9993; 9 AM adj = 9*60/1440 = 0.375 → 9 AM is more urgent
+    expect(adjustedDaysUntilDue(nineAm, TODAY)).toBeLessThan(adjustedDaysUntilDue(noTime, TODAY));
   });
 
   test('earlier dueTime on the same day yields a lower adjusted value', () => {

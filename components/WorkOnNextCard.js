@@ -4,7 +4,7 @@ import { complexityLabel, dueDateLabel } from '../lib/displayHelpers';
 // Prominent card shown at the top of the list for the highest-priority
 // incomplete assignment (as selected by lib/ordering.pickWorkOnNext).
 export default function WorkOnNextCard({ assignment }) {
-  const label = dueDateLabel(assignment.dueDate);
+  const label = dueDateLabel(assignment.dueDate, new Date(), assignment.dueTime);
   return (
     <View className="mx-4 mb-3 rounded-2xl overflow-hidden" style={{ backgroundColor: '#1E3A8A' }}>
       <View className="px-4 pt-4 pb-1">
