@@ -22,11 +22,12 @@ const VALID_FORM = {
 // EMPTY_ERRORS shape
 // ---------------------------------------------------------------------------
 describe('EMPTY_ERRORS', () => {
-  test('has exactly the four expected keys, all empty strings', () => {
+  test('has exactly the expected keys, all empty strings', () => {
     expect(EMPTY_ERRORS).toEqual({
       title: '',
       course: '',
       dueDate: '',
+      dueTime: '',
       repeatUntil: '',
     });
   });
@@ -43,6 +44,33 @@ describe('hasErrors', () => {
   test('returns true when any field has a message', () => {
     expect(hasErrors({ ...EMPTY_ERRORS, title: 'required' })).toBe(true);
     expect(hasErrors({ ...EMPTY_ERRORS, dueDate: 'invalid' })).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// validateAssignmentForm — dueTime (optional field)
+// ---------------------------------------------------------------------------
+describe('validateAssignmentForm — dueTime', () => {
+  test('no error when dueTime is empty (field is optional)', () => {
+    const { dueTime } = validateAssignmentForm({ ...VALID_FORM, dueTime: '' });
+    expect(dueTime).toBe('');
+  });
+
+  test('no error when dueTime is absent', () => {
+    const form = { ...VALID_FORM };
+    delete form.dueTime;
+    const { dueTime } = validateAssignmentForm(form);
+    expect(dueTime).toBe('');
+  });
+
+  test('no error for a valid HH:MM time', () => {
+    const { dueTime } = validateAssignmentForm({ ...VALID_FORM, dueTime: '17:00' });
+    expect(dueTime).toBe('');
+  });
+
+  test('error for an invalid time string', () => {
+    const { dueTime } = validateAssignmentForm({ ...VALID_FORM, dueTime: '25:00' });
+    expect(dueTime).toMatch(/HH:MM/i);
   });
 });
 
@@ -191,5 +219,40 @@ describe('validateAssignmentForm — repeatWeekly', () => {
     });
     expect(errors.dueDate).not.toBe('');
     expect(errors.repeatUntil).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// validateAssignmentForm — biweekly (repeatInterval = 2)
+// ---------------------------------------------------------------------------
+describe('validateAssignmentForm — biweekly recurrence', () => {
+  const BIWEEKLY = { ...VALID_FORM, repeatWeekly: true, repeatInterval: 2 };
+
+  test('no error when 52 biweekly occurrences are within the window', () => {
+    // 52 occurrences × 2 weeks each = 51 intervals = 51 * 14 days from start
+    const dueDate = '2026-01-05';
+    // 51 biweekly intervals = 51 * 14 = 714 days later
+    const repeatUntil = '2027-12-21';
+    const errors = validateAssignmentForm({ ...BIWEEKLY, dueDate, repeatUntil });
+    expect(errors.repeatUntil).toBe('');
+  });
+
+  test('error when biweekly occurrences exceed the 52-occurrence cap', () => {
+    // Pick a window wide enough to exceed 52 biweekly occurrences (~2+ years)
+    const { repeatUntil } = validateAssignmentForm({
+      ...BIWEEKLY,
+      dueDate: '2026-01-05',
+      repeatUntil: '2029-01-01', // ~156 weeks → 78 biweekly occurrences
+    });
+    expect(repeatUntil).toMatch(/52/);
+  });
+
+  test('error message does not mention "weeks" (occurrence-based wording)', () => {
+    const { repeatUntil } = validateAssignmentForm({
+      ...BIWEEKLY,
+      dueDate: '2026-01-05',
+      repeatUntil: '2029-01-01',
+    });
+    expect(repeatUntil.toLowerCase()).not.toMatch(/\bwithin \d+ weeks\b/);
   });
 });

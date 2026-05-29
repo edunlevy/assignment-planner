@@ -3,6 +3,7 @@ import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Calendar } from 'react-native-calendars';
 
 import { STATUS_COLORS, STATUS_LABELS } from './AssignmentFormModal';
+import { formatTime } from '../lib/displayHelpers';
 
 function todayISO() {
   const d = new Date();
@@ -12,8 +13,26 @@ function todayISO() {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+function currentMonthKey(isoDate) {
+  return isoDate.slice(0, 7); // "YYYY-MM"
+}
+
 export default function CalendarView({ assignments, onSelectAssignment }) {
   const [selectedDate, setSelectedDate] = useState(todayISO());
+  const [calendarMonth, setCalendarMonth] = useState(todayISO());
+  // Incremented only when the user taps Today, forcing the Calendar to remount
+  // at the current month. Normal arrow navigation does NOT increment this, so
+  // the library keeps its own scroll state without flashing.
+  const [jumpKey, setJumpKey] = useState(0);
+
+  const isOnTodayMonth = currentMonthKey(calendarMonth) === currentMonthKey(todayISO());
+
+  function jumpToToday() {
+    const today = todayISO();
+    setSelectedDate(today);
+    setCalendarMonth(today);
+    setJumpKey(k => k + 1);
+  }
 
   const markedDates = useMemo(() => {
     const map = {};
@@ -42,15 +61,24 @@ export default function CalendarView({ assignments, onSelectAssignment }) {
   return (
     <View style={styles.container}>
       <Calendar
+        key={jumpKey}
+        current={calendarMonth}
         markingType="multi-dot"
         markedDates={markedDates}
         onDayPress={day => setSelectedDate(day.dateString)}
+        onMonthChange={month => setCalendarMonth(month.dateString)}
         theme={{
           todayTextColor: '#3B5BDB',
           arrowColor: '#3B5BDB',
           selectedDayBackgroundColor: '#3B5BDB',
         }}
       />
+
+      {!isOnTodayMonth && (
+        <Pressable style={styles.todayButton} onPress={jumpToToday}>
+          <Text style={styles.todayButtonText}>Today</Text>
+        </Pressable>
+      )}
 
       <View style={styles.pill}>
         <Text style={styles.pillText}>
@@ -73,6 +101,9 @@ export default function CalendarView({ assignments, onSelectAssignment }) {
                 {item.title}
               </Text>
               <Text style={styles.rowCourse}>{item.course}</Text>
+              {!!item.dueTime && (
+                <Text style={styles.rowTime}>{formatTime(item.dueTime)}</Text>
+              )}
             </View>
             <View style={[styles.badge, { backgroundColor: STATUS_COLORS[item.status] }]}>
               <Text style={styles.badgeText}>{STATUS_LABELS[item.status]}</Text>
@@ -91,6 +122,19 @@ export default function CalendarView({ assignments, onSelectAssignment }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  todayButton: {
+    alignSelf: 'center',
+    marginTop: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: '#3B5BDB',
+  },
+  todayButtonText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
   pill: {
     alignSelf: 'center',
@@ -130,6 +174,7 @@ const styles = StyleSheet.create({
     color: '#888',
   },
   rowCourse: { fontSize: 12, color: '#3B5BDB', marginTop: 2, fontWeight: '500' },
+  rowTime: { fontSize: 11, color: '#888', marginTop: 2 },
   badge: {
     borderRadius: 20,
     paddingHorizontal: 10,

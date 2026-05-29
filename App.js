@@ -148,11 +148,13 @@ function AppScreen() {
       const drafts = buildWeeklySeries({
         startISO: values.dueDate,
         untilISO: values.repeatUntil,
+        intervalWeeks: values.repeatInterval ?? 1,
         base: {
           title: values.title,
           course: values.course,
           importance: values.importance,
           complexity: values.complexity,
+          ...(values.dueTime ? { dueTime: values.dueTime } : {}),
           status: 'not_started',
         },
         seriesId: uuidv4(),

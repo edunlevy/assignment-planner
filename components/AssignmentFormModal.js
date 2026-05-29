@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DueDateField from './DueDateField';
+import DueTimeField from './DueTimeField';
 import RecurringSeriesSection from './RecurringSeriesSection';
 import { validateAssignmentForm, EMPTY_ERRORS } from '../lib/formValidation';
 
@@ -45,9 +46,9 @@ const COMPLEXITY_OPTIONS = [
 ];
 
 const EMPTY_FORM = {
-  title: '', course: '', dueDate: '', importance: 3, status: 'not_started',
+  title: '', course: '', dueDate: '', dueTime: '', importance: 3, status: 'not_started',
   complexity: 'medium',
-  repeatWeekly: false, repeatUntil: '',
+  repeatWeekly: false, repeatInterval: 1, repeatUntil: '',
 };
 
 // EMPTY_ERRORS imported from lib/formValidation
@@ -58,6 +59,7 @@ function formFor(item) {
     title: item.title,
     course: item.course,
     dueDate: item.dueDate,
+    dueTime: item.dueTime ?? '',
     importance: item.importance,
     status: item.status,
     complexity: item.complexity ?? 'medium',
@@ -97,15 +99,17 @@ export default function AssignmentFormModal({
 
   async function handleSave() {
     const errors = validateAssignmentForm(form, { isEditing });
-    if (errors.title || errors.course || errors.dueDate || errors.repeatUntil) {
+    if (errors.title || errors.course || errors.dueDate || errors.dueTime || errors.repeatUntil) {
       setFieldErrors(errors);
       return;
     }
 
+    const trimmedTime = form.dueTime.trim();
     const base = {
       title: form.title.trim(),
       course: form.course.trim(),
       dueDate: form.dueDate.trim(),
+      dueTime: trimmedTime || null,
       importance: form.importance,
       complexity: form.complexity,
     };
@@ -115,6 +119,7 @@ export default function AssignmentFormModal({
     } else if (form.repeatWeekly) {
       await onCreateRecurring({
         ...base,
+        repeatInterval: form.repeatInterval,
         repeatUntil: form.repeatUntil.trim(),
       });
     } else {
@@ -184,6 +189,18 @@ export default function AssignmentFormModal({
             />
             {fieldErrors.dueDate ? <Text style={styles.errorText}>{fieldErrors.dueDate}</Text> : null}
 
+            <Text style={styles.label}>Due Time (optional)</Text>
+            <DueTimeField
+              value={form.dueTime}
+              hasError={!!fieldErrors.dueTime}
+              onChange={t => {
+                setForm(f => ({ ...f, dueTime: t }));
+                if (fieldErrors.dueTime) setFieldErrors(e => ({ ...e, dueTime: '' }));
+              }}
+              onClear={() => setForm(f => ({ ...f, dueTime: '' }))}
+            />
+            {fieldErrors.dueTime ? <Text style={styles.errorText}>{fieldErrors.dueTime}</Text> : null}
+
             <Text style={styles.label}>Importance</Text>
             <View style={styles.importanceRow}>
               {[1, 2, 3, 4, 5].map(n => (
@@ -240,10 +257,12 @@ export default function AssignmentFormModal({
             {!isEditing && (
               <RecurringSeriesSection
                 repeatWeekly={form.repeatWeekly}
+                repeatInterval={form.repeatInterval}
                 repeatUntil={form.repeatUntil}
                 dueDate={form.dueDate}
                 repeatUntilError={fieldErrors.repeatUntil}
-                onToggle={() => setForm(f => ({ ...f, repeatWeekly: !f.repeatWeekly, repeatUntil: '' }))}
+                onToggle={() => setForm(f => ({ ...f, repeatWeekly: !f.repeatWeekly, repeatInterval: 1, repeatUntil: '' }))}
+                onIntervalChange={n => setForm(f => ({ ...f, repeatInterval: n }))}
                 onRepeatUntilChange={iso => {
                   setForm(f => ({ ...f, repeatUntil: iso }));
                   if (fieldErrors.repeatUntil) setFieldErrors(e => ({ ...e, repeatUntil: '' }));

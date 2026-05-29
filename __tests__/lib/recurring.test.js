@@ -4,6 +4,66 @@ import {
   countWeeklyOccurrences,
 } from '../../lib/recurring';
 
+// ---------------------------------------------------------------------------
+// Biweekly (intervalWeeks = 2)
+// ---------------------------------------------------------------------------
+describe('countWeeklyOccurrences — biweekly', () => {
+  test('counts correctly over a biweekly window', () => {
+    // Jan 5, Jan 19: 2 occurrences at 2-week interval
+    expect(countWeeklyOccurrences('2026-01-05', '2026-01-19', 2)).toBe(2);
+  });
+
+  test('counts 1 when start === until', () => {
+    expect(countWeeklyOccurrences('2026-01-05', '2026-01-05', 2)).toBe(1);
+  });
+
+  test('returns 0 when until is before start', () => {
+    expect(countWeeklyOccurrences('2026-01-19', '2026-01-05', 2)).toBe(0);
+  });
+
+  test('defaults to weekly (intervalWeeks=1) when param is omitted', () => {
+    expect(countWeeklyOccurrences('2026-01-05', '2026-01-26')).toBe(4);
+  });
+});
+
+describe('buildWeeklySeries — biweekly', () => {
+  test('produces correct biweekly dates', () => {
+    const drafts = buildWeeklySeries({
+      startISO: '2026-01-05',
+      untilISO: '2026-02-02',
+      base: { title: 'Reading', course: 'HIST', importance: 2, status: 'not_started' },
+      seriesId: 'series-biweekly',
+      intervalWeeks: 2,
+    });
+    expect(drafts.map(d => d.dueDate)).toEqual([
+      '2026-01-05',
+      '2026-01-19',
+      '2026-02-02',
+    ]);
+  });
+
+  test('defaults to weekly when intervalWeeks is omitted', () => {
+    const drafts = buildWeeklySeries({
+      startISO: '2026-01-05',
+      untilISO: '2026-01-26',
+      base: { title: 'x', course: 'y' },
+      seriesId: 's',
+    });
+    expect(drafts).toHaveLength(4);
+  });
+
+  test('truncates at MAX_WEEKLY_OCCURRENCES with biweekly interval', () => {
+    const drafts = buildWeeklySeries({
+      startISO: '2026-01-01',
+      untilISO: '2031-01-01',
+      base: { title: 'x', course: 'y' },
+      seriesId: 's',
+      intervalWeeks: 2,
+    });
+    expect(drafts.length).toBe(MAX_WEEKLY_OCCURRENCES);
+  });
+});
+
 describe('countWeeklyOccurrences', () => {
   test('counts 1 when start === until', () => {
     expect(countWeeklyOccurrences('2026-01-05', '2026-01-05')).toBe(1);

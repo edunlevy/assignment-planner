@@ -1,6 +1,7 @@
 import {
   DEFAULT_COMPLEXITY,
   isValidDate,
+  isValidTime,
   rowsMatch,
   sanitizeAssignment,
   VALID_COMPLEXITIES,
@@ -84,6 +85,64 @@ describe('sanitizeAssignment — complexity handling', () => {
     expect(sanitizeAssignment({ ...base, complexity: null }).complexity).toBe('medium');
     expect(sanitizeAssignment({ ...base, complexity: 42 }).complexity).toBe('medium');
     expect(sanitizeAssignment({ ...base, complexity: '' }).complexity).toBe('medium');
+  });
+});
+
+describe('isValidTime', () => {
+  test('accepts valid HH:MM strings', () => {
+    expect(isValidTime('00:00')).toBe(true);
+    expect(isValidTime('17:00')).toBe(true);
+    expect(isValidTime('23:59')).toBe(true);
+    expect(isValidTime('09:30')).toBe(true);
+  });
+
+  test('rejects out-of-range values', () => {
+    expect(isValidTime('24:00')).toBe(false);
+    expect(isValidTime('17:60')).toBe(false);
+    expect(isValidTime('25:00')).toBe(false);
+  });
+
+  test('rejects wrong format', () => {
+    expect(isValidTime('5:00')).toBe(false);
+    expect(isValidTime('5pm')).toBe(false);
+    expect(isValidTime('17:00:00')).toBe(false);
+    expect(isValidTime('')).toBe(false);
+    expect(isValidTime(null)).toBe(false);
+  });
+});
+
+describe('sanitizeAssignment — dueTime handling', () => {
+  const base = { id: 'x', title: 't', course: 'c', dueDate: '2026-06-01' };
+
+  test('preserves a valid dueTime', () => {
+    expect(sanitizeAssignment({ ...base, dueTime: '17:00' }).dueTime).toBe('17:00');
+  });
+
+  test('omits dueTime when invalid', () => {
+    const out = sanitizeAssignment({ ...base, dueTime: '25:00' });
+    expect(out.dueTime).toBeUndefined();
+  });
+
+  test('omits dueTime when absent', () => {
+    const out = sanitizeAssignment(base);
+    expect(out.dueTime).toBeUndefined();
+  });
+});
+
+describe('rowsMatch — dueTime inclusion', () => {
+  test('returns false when dueTime differs', () => {
+    expect(rowsMatch({ ...BASE, dueTime: '09:00' }, { ...BASE, dueTime: '17:00' })).toBe(false);
+  });
+
+  test('treats undefined and null dueTime as the same', () => {
+    const noDueTime = { ...BASE };
+    delete noDueTime.dueTime;
+    expect(rowsMatch({ ...BASE, dueTime: null }, noDueTime)).toBe(true);
+    expect(rowsMatch({ ...BASE, dueTime: undefined }, noDueTime)).toBe(true);
+  });
+
+  test('returns true when both have the same dueTime', () => {
+    expect(rowsMatch({ ...BASE, dueTime: '14:30' }, { ...BASE, dueTime: '14:30' })).toBe(true);
   });
 });
 

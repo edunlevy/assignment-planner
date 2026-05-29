@@ -1,4 +1,4 @@
-import { complexityLabel, dueDateLabel } from '../../lib/displayHelpers';
+import { complexityLabel, dueDateLabel, formatTime } from '../../lib/displayHelpers';
 
 // Fixed reference date — all tests pass this as `today` so results never
 // depend on the real clock.
@@ -21,6 +21,25 @@ describe('complexityLabel', () => {
     expect(complexityLabel(null)).toBe('Medium');
     expect(complexityLabel('')).toBe('Medium');
     expect(complexityLabel('huge')).toBe('Medium');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatTime
+// ---------------------------------------------------------------------------
+describe('formatTime', () => {
+  test('converts 24-hour HH:MM to 12-hour AM/PM', () => {
+    expect(formatTime('17:00')).toBe('5:00 PM');
+    expect(formatTime('09:30')).toBe('9:30 AM');
+    expect(formatTime('00:00')).toBe('12:00 AM');
+    expect(formatTime('12:00')).toBe('12:00 PM');
+    expect(formatTime('23:59')).toBe('11:59 PM');
+  });
+
+  test('returns empty string for invalid input', () => {
+    expect(formatTime('')).toBe('');
+    expect(formatTime(null)).toBe('');
+    expect(formatTime('5pm')).toBe('');
   });
 });
 
@@ -61,5 +80,17 @@ describe('dueDateLabel', () => {
     expect(result).toHaveProperty('urgent');
     expect(typeof result.text).toBe('string');
     expect(typeof result.urgent).toBe('boolean');
+  });
+
+  test('appends formatted time when dueTime is provided', () => {
+    expect(dueDateLabel('2026-06-01', TODAY, '17:00')).toEqual({ text: 'Due today at 5:00 PM', urgent: true });
+    expect(dueDateLabel('2026-06-02', TODAY, '09:00')).toEqual({ text: 'Due tomorrow at 9:00 AM', urgent: true });
+    expect(dueDateLabel('2026-05-28', TODAY, '23:59')).toEqual({ text: 'Overdue at 11:59 PM', urgent: true });
+    expect(dueDateLabel('2026-06-09', TODAY, '14:30')).toEqual({ text: 'Due 2026-06-09 at 2:30 PM', urgent: false });
+  });
+
+  test('omitting dueTime leaves label unchanged from previous behavior', () => {
+    expect(dueDateLabel('2026-06-01', TODAY)).toEqual({ text: 'Due today', urgent: true });
+    expect(dueDateLabel('2026-06-02', TODAY)).toEqual({ text: 'Due tomorrow', urgent: true });
   });
 });

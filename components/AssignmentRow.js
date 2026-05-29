@@ -6,7 +6,7 @@ import ImportanceBar from './ImportanceBar';
 // A single row in the assignment list. Tapping it opens the edit modal.
 export default function AssignmentRow({ item, onPress }) {
   const isCompleted = item.status === 'completed';
-  const label = dueDateLabel(item.dueDate);
+  const label = dueDateLabel(item.dueDate, new Date(), item.dueTime);
   return (
     <Pressable
       style={[styles.card, isCompleted && styles.cardCompleted]}
