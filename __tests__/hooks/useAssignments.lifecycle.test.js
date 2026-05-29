@@ -266,9 +266,9 @@ describe('remote realtime events', () => {
     expect(result.current.assignments[0].id).toBe('from-other-device');
     expect(result.current.assignments[0].reminderIds).toEqual(['remote-24h', 'remote-1h']);
 
-    // Reminder map updated
+    // Reminder map updated — new format stores { ids, sig }
     const map = JSON.parse(await AsyncStorage.getItem(`reminder_ids_${USER_ID}`));
-    expect(map['from-other-device']).toEqual(['remote-24h', 'remote-1h']);
+    expect(map['from-other-device'].ids).toEqual(['remote-24h', 'remote-1h']);
   });
 
   test('remote UPDATE: cancels old reminders, schedules new ones, updates state', async () => {

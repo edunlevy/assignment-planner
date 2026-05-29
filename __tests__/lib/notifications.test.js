@@ -10,8 +10,12 @@ import {
   loadReminderIdsFor,
   loadReminderMap,
   loadStoredTimezone,
+  makeReminderEntry,
   mergeReminderIds,
+  reminderEntryIds,
+  reminderEntrySig,
   reminderMapsEqual,
+  reminderSig,
   requestNotificationPermission,
   saveReminderMap,
   scheduleReminders,
@@ -255,6 +259,100 @@ describe('mergeReminderIds', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Reminder map entry helpers
+// ---------------------------------------------------------------------------
+describe('reminderSig', () => {
+  test('encodes the four scheduling-relevant fields', () => {
+    expect(reminderSig({
+      dueDate: '2026-06-01', dueTime: '17:00', title: 'Essay', course: 'ENGL',
+    })).toBe('2026-06-01|17:00|Essay|ENGL');
+  });
+
+  test('uses empty string for absent dueTime', () => {
+    expect(reminderSig({
+      dueDate: '2026-06-01', dueTime: undefined, title: 'Essay', course: 'ENGL',
+    })).toBe('2026-06-01||Essay|ENGL');
+  });
+});
+
+describe('reminderEntryIds', () => {
+  test('returns the array directly for old string[] format', () => {
+    expect(reminderEntryIds(['n1', 'n2'])).toEqual(['n1', 'n2']);
+  });
+
+  test('extracts ids from new {ids, sig} format', () => {
+    expect(reminderEntryIds({ ids: ['n1'], sig: 'sig' })).toEqual(['n1']);
+  });
+
+  test('returns [] for null / undefined / unknown shape', () => {
+    expect(reminderEntryIds(null)).toEqual([]);
+    expect(reminderEntryIds(undefined)).toEqual([]);
+    expect(reminderEntryIds('bad')).toEqual([]);
+  });
+});
+
+describe('reminderEntrySig', () => {
+  test('returns null for old string[] format (no sig stored)', () => {
+    expect(reminderEntrySig(['n1', 'n2'])).toBeNull();
+  });
+
+  test('returns the sig string from new format', () => {
+    expect(reminderEntrySig({ ids: ['n1'], sig: '2026-06-01||Essay|ENGL' })).toBe('2026-06-01||Essay|ENGL');
+  });
+
+  test('returns null for null / undefined', () => {
+    expect(reminderEntrySig(null)).toBeNull();
+    expect(reminderEntrySig(undefined)).toBeNull();
+  });
+});
+
+describe('makeReminderEntry', () => {
+  test('produces a new-format entry with ids and sig', () => {
+    const entry = makeReminderEntry(['n1', 'n2'], 'some-sig');
+    expect(entry).toEqual({ ids: ['n1', 'n2'], sig: 'some-sig' });
+    expect(reminderEntryIds(entry)).toEqual(['n1', 'n2']);
+    expect(reminderEntrySig(entry)).toBe('some-sig');
+  });
+});
+
+describe('loadReminderMap — new {ids,sig} format', () => {
+  test('round-trips a new-format entry', async () => {
+    const map = { a1: makeReminderEntry(['n1', 'n2'], 'sig-a') };
+    await saveReminderMap('user-1', map);
+    const loaded = await loadReminderMap('user-1');
+    expect(loaded).toEqual({ a1: { ids: ['n1', 'n2'], sig: 'sig-a' } });
+  });
+
+  test('preserves a mix of legacy and new-format entries', async () => {
+    const map = {
+      old: ['n1', 'n2'],
+      new: makeReminderEntry(['n3'], 'sig-b'),
+    };
+    await saveReminderMap('user-1', map);
+    const loaded = await loadReminderMap('user-1');
+    expect(loaded.old).toEqual(['n1', 'n2']);
+    expect(loaded.new).toEqual({ ids: ['n3'], sig: 'sig-b' });
+  });
+});
+
+describe('mergeReminderIds — new format', () => {
+  test('extracts plain ids from a new-format map entry', () => {
+    const merged = mergeReminderIds(
+      [{ id: 'a1', title: 't' }],
+      { a1: makeReminderEntry(['n1', 'n2'], 'sig') },
+    );
+    expect(merged[0].reminderIds).toEqual(['n1', 'n2']);
+  });
+});
+
+describe('loadReminderIdsFor — new format', () => {
+  test('returns the ids array from a new-format entry', async () => {
+    await saveReminderMap('user-1', { a1: makeReminderEntry(['n1'], 'sig') });
+    expect(await loadReminderIdsFor('user-1', 'a1')).toEqual(['n1']);
+  });
+});
+
 describe('reminderMapsEqual', () => {
   test('returns true for identical maps', () => {
     expect(reminderMapsEqual({ a: ['x', 'y'] }, { a: ['x', 'y'] })).toBe(true);
@@ -271,6 +369,25 @@ describe('reminderMapsEqual', () => {
 
   test('returns false when array lengths differ', () => {
     expect(reminderMapsEqual({ a: ['x'] }, { a: ['x', 'y'] })).toBe(false);
+  });
+
+  test('returns true for identical new-format entries', () => {
+    const entry = makeReminderEntry(['n1'], 'sig-a');
+    expect(reminderMapsEqual({ a: entry }, { a: makeReminderEntry(['n1'], 'sig-a') })).toBe(true);
+  });
+
+  test('returns false when sigs differ between new-format entries', () => {
+    expect(reminderMapsEqual(
+      { a: makeReminderEntry(['n1'], 'sig-a') },
+      { a: makeReminderEntry(['n1'], 'sig-b') },
+    )).toBe(false);
+  });
+
+  test('returns false when one side is legacy and other is new (different sigs: null vs string)', () => {
+    expect(reminderMapsEqual(
+      { a: ['n1'] },
+      { a: makeReminderEntry(['n1'], 'sig-a') },
+    )).toBe(false);
   });
 });
 

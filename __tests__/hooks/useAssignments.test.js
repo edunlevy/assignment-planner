@@ -152,9 +152,10 @@ describe('insert', () => {
     expect(result.current.assignments).toHaveLength(1);
     expect(result.current.assignments[0].id).toBe(inserted.id);
 
-    // Reminder map persisted to disk
+    // Reminder map persisted to disk — new format stores { ids, sig }
     const map = JSON.parse(await AsyncStorage.getItem(`reminder_ids_${USER_ID}`));
-    expect(map[inserted.id]).toEqual(['reminder-24h', 'reminder-1h']);
+    expect(map[inserted.id].ids).toEqual(['reminder-24h', 'reminder-1h']);
+    expect(typeof map[inserted.id].sig).toBe('string');
   });
 
   test('DB error: rejects, leaves state empty, no reminder map entry', async () => {
@@ -240,10 +241,10 @@ describe('insertMany', () => {
 
     expect(result.current.assignments).toHaveLength(2);
 
-    // Reminder map records all ids
+    // Reminder map records all ids — new format stores { ids, sig }
     const map = JSON.parse(await AsyncStorage.getItem(`reminder_ids_${USER_ID}`));
-    expect(map[saved[0].id]).toEqual(['r1-24h', 'r1-1h']);
-    expect(map[saved[1].id]).toEqual(['r2-24h', 'r2-1h']);
+    expect(map[saved[0].id].ids).toEqual(['r1-24h', 'r1-1h']);
+    expect(map[saved[1].id].ids).toEqual(['r2-24h', 'r2-1h']);
   });
 
   test('DB error: rejects, state unchanged, no reminder map entries', async () => {
@@ -328,9 +329,9 @@ describe('update', () => {
     expect(result.current.assignments[0].title).toBe('Updated essay');
     expect(result.current.assignments[0].reminderIds).toEqual(['new-24h', 'new-1h']);
 
-    // Map updated
+    // Map updated — new format stores { ids, sig }
     const map = JSON.parse(await AsyncStorage.getItem(`reminder_ids_${USER_ID}`));
-    expect(map[row.id]).toEqual(['new-24h', 'new-1h']);
+    expect(map[row.id].ids).toEqual(['new-24h', 'new-1h']);
   });
 
   test('reads OLD reminder ids from disk, not from in-memory state', async () => {

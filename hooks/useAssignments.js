@@ -20,8 +20,12 @@ import {
   detectTimezoneChanged,
   loadReminderIdsFor,
   loadReminderMap,
+  makeReminderEntry,
   mergeReminderIds,
+  reminderEntryIds,
+  reminderEntrySig,
   reminderMapsEqual,
+  reminderSig,
   requestNotificationPermission,
   saveReminderMap,
   scheduleReminders,
@@ -261,7 +265,7 @@ export function useAssignments(userId) {
           // 1. Rows in the map but absent from the fresh fetch → deleted remotely.
           for (const id of Object.keys(updatedMap)) {
             if (!freshIds.has(id)) {
-              await cancelReminders(updatedMap[id]);
+              await cancelReminders(reminderEntryIds(updatedMap[id]));
               delete updatedMap[id];
             }
           }
@@ -270,7 +274,7 @@ export function useAssignments(userId) {
           // 2. Rows now completed that still have reminder IDs in the map.
           for (const a of merged) {
             if (a.status === 'completed' && updatedMap[a.id]) {
-              await cancelReminders(updatedMap[a.id]);
+              await cancelReminders(reminderEntryIds(updatedMap[a.id]));
               delete updatedMap[a.id];
             }
           }
@@ -297,19 +301,61 @@ export function useAssignments(userId) {
           // so subsequent calls return immediately without prompting again.
           await requestNotificationPermission();
 
+          // Identify incomplete rows that need (re)scheduling:
+          //   • no reminder IDs at all → schedule fresh
+          //   • has reminder IDs but sig changed → another device edited
+          //     dueDate/dueTime/title/course while this device was offline;
+          //     the old notifications fire at the wrong time with stale content
+          //   • has reminder IDs, no stored sig → legacy entry (pre-signature
+          //     format); treat as changed so we migrate to the new format on
+          //     the first open after upgrade
+          const toSchedule = [];
+          const staleEntryIds = new Map(); // id → old notification IDs to cancel
+
+          for (const a of reconciled) {
+            if (a.status === 'completed') continue;
+            const mapEntry = updatedMap[a.id];
+            const existingIds = reminderEntryIds(mapEntry ?? []);
+            if (existingIds.length === 0) {
+              toSchedule.push(a);
+            } else {
+              const storedSig = reminderEntrySig(mapEntry);
+              if (storedSig === null || storedSig !== reminderSig(a)) {
+                staleEntryIds.set(a.id, existingIds);
+                toSchedule.push(a);
+              }
+            }
+          }
+
+          // Cancel stale notifications before rescheduling.
+          for (const [, ids] of staleEntryIds) {
+            await cancelReminders(ids);
+          }
+          if (cancelled) return;
+
+          // Remove stale entries from the map so Phase B's save below
+          // doesn't resurrect them.
+          for (const id of staleEntryIds.keys()) {
+            delete updatedMap[id];
+          }
+
+          // For rows being rescheduled, clear their in-memory reminderIds so
+          // the state we commit below is consistent with the new map entries.
+          const reschedulingIds = new Set(staleEntryIds.keys());
+          const reconciledReady = reconciled.map(a =>
+            reschedulingIds.has(a.id) ? { ...a, reminderIds: [] } : a
+          );
+
           // Schedule in a single batch against one shared iOS slot budget so
           // concurrent schedules can't collectively overrun the 64-pending cap.
-          const needsScheduling = reconciled.filter(
-            a => a.status !== 'completed' && a.reminderIds.length === 0
-          );
-          const newIdsList = await scheduleRemindersBatch(needsScheduling);
+          const newIdsList = await scheduleRemindersBatch(toSchedule);
           const newIdsById = new Map(
-            needsScheduling.map((a, i) => [a.id, newIdsList[i]])
+            toSchedule.map((a, i) => [a.id, newIdsList[i]])
           );
-          const withReminders = reconciled.map(a => {
+          const withReminders = reconciledReady.map(a => {
             if (!newIdsById.has(a.id)) return a;
             const ids = newIdsById.get(a.id);
-            if (ids.length > 0) updatedMap[a.id] = ids;
+            if (ids.length > 0) updatedMap[a.id] = makeReminderEntry(ids, reminderSig(a));
             return { ...a, reminderIds: ids };
           });
           if (cancelled || thisFetch < dataVersionRef.current) return;
@@ -375,7 +421,7 @@ export function useAssignments(userId) {
         const map = await loadReminderMap(userId);
         if (cancelled) return;
         for (const a of incomplete) {
-          const ids = map[a.id] ?? [];
+          const ids = reminderEntryIds(map[a.id] ?? []);
           if (ids.length > 0) await cancelReminders(ids);
           if (cancelled) return;
         }
@@ -398,7 +444,7 @@ export function useAssignments(userId) {
         const newMap = { ...map };
         incomplete.forEach((a, i) => {
           const ids = newIdsList[i] ?? [];
-          if (ids.length > 0) newMap[a.id] = ids;
+          if (ids.length > 0) newMap[a.id] = makeReminderEntry(ids, reminderSig(a));
           else delete newMap[a.id];
         });
         if (!reminderMapsEqual(newMap, map)) {
@@ -460,7 +506,7 @@ export function useAssignments(userId) {
       }
       const map = await loadReminderMap(userId);
       if (cancelled) return null;
-      if (reminderIds.length > 0) map[row.id] = reminderIds;
+      if (reminderIds.length > 0) map[row.id] = makeReminderEntry(reminderIds, reminderSig(row));
       else delete map[row.id];
       await saveReminderMap(userId, map);
       return { ...row, reminderIds };
@@ -562,7 +608,7 @@ export function useAssignments(userId) {
       settleSelfMutation(saved.id, saved);
       const reminderIds = await scheduleReminders(saved);
       const map = await loadReminderMap(userId);
-      if (reminderIds.length > 0) map[saved.id] = reminderIds;
+      if (reminderIds.length > 0) map[saved.id] = makeReminderEntry(reminderIds, reminderSig(saved));
       await saveReminderMap(userId, map);
       const withReminders = { ...saved, reminderIds };
       commitLocal(prev => prev.some(a => a.id === saved.id)
@@ -598,7 +644,7 @@ export function useAssignments(userId) {
       const withReminders = saved.map((a, i) => ({ ...a, reminderIds: reminderIdsList[i] }));
       const map = await loadReminderMap(userId);
       for (const a of withReminders) {
-        if (a.reminderIds.length > 0) map[a.id] = a.reminderIds;
+        if (a.reminderIds.length > 0) map[a.id] = makeReminderEntry(a.reminderIds, reminderSig(a));
       }
       await saveReminderMap(userId, map);
       commitLocal(prev => {
@@ -647,7 +693,7 @@ export function useAssignments(userId) {
       : [];
 
     const map = await loadReminderMap(userId);
-    if (reminderIds.length > 0) map[id] = reminderIds;
+    if (reminderIds.length > 0) map[id] = makeReminderEntry(reminderIds, reminderSig(updated));
     else delete map[id];
     await saveReminderMap(userId, map);
 
