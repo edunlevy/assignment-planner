@@ -524,3 +524,69 @@ describe('device timezone helpers', () => {
     expect(await loadStoredTimezone('user-1')).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Due-time awareness — reminders fire relative to dueTime when present
+// ---------------------------------------------------------------------------
+describe('scheduleReminders — dueTime', () => {
+  // Pin now well before any trigger so nothing is skipped as "already past".
+  const NOW = new Date('2026-05-15T06:00:00').getTime();
+
+  beforeEach(() => {
+    jest.spyOn(Date, 'now').mockReturnValue(NOW);
+    Notifications.scheduleNotificationAsync
+      .mockResolvedValueOnce('id-24h')
+      .mockResolvedValueOnce('id-1h');
+  });
+
+  afterEach(() => {
+    Date.now.mockRestore();
+  });
+
+  test('when dueTime is set, 24h trigger fires at dueTime-24h on the prior day', async () => {
+    // dueAt = 2026-05-20 09:00 local → 24h reminder = 2026-05-19 09:00 local
+    await scheduleReminders({
+      id: 'a1', title: 'Essay', course: 'ENGL',
+      dueDate: '2026-05-20', dueTime: '09:00',
+    });
+
+    const t24 = Notifications.scheduleNotificationAsync.mock.calls[0][0].trigger;
+    expect(t24).toMatchObject({ year: 2026, month: 5, day: 19, hour: 9, minute: 0 });
+  });
+
+  test('when dueTime is set, 1h trigger fires at dueTime-1h on the due date', async () => {
+    // dueAt = 2026-05-20 09:00 local → 1h reminder = 2026-05-20 08:00 local
+    await scheduleReminders({
+      id: 'a1', title: 'Essay', course: 'ENGL',
+      dueDate: '2026-05-20', dueTime: '09:00',
+    });
+
+    const t1h = Notifications.scheduleNotificationAsync.mock.calls[1][0].trigger;
+    expect(t1h).toMatchObject({ year: 2026, month: 5, day: 20, hour: 8, minute: 0 });
+  });
+
+  test('when dueTime is absent, falls back to 23:59 on the due date', async () => {
+    // No dueTime → dueAt = 2026-05-20 23:59 → 1h reminder = 2026-05-20 22:59
+    await scheduleReminders({
+      id: 'a1', title: 'Essay', course: 'ENGL',
+      dueDate: '2026-05-20',
+    });
+
+    const t1h = Notifications.scheduleNotificationAsync.mock.calls[1][0].trigger;
+    expect(t1h).toMatchObject({ year: 2026, month: 5, day: 20, hour: 22, minute: 59 });
+  });
+
+  test('skips past triggers when dueTime is set and the window has already passed', async () => {
+    // dueAt = 2026-05-20 09:00; now is 2026-05-15, but both reminders are
+    // before "now" if now > dueAt-24h. Force now past both triggers.
+    Date.now.mockRestore();
+    jest.spyOn(Date, 'now').mockReturnValue(new Date('2026-05-20T09:30:00').getTime());
+
+    const ids = await scheduleReminders({
+      id: 'a1', title: 'Essay', course: 'ENGL',
+      dueDate: '2026-05-20', dueTime: '09:00',
+    });
+    expect(ids).toEqual([]);
+    expect(Notifications.scheduleNotificationAsync).not.toHaveBeenCalled();
+  });
+});
