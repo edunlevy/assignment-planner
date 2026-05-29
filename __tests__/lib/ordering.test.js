@@ -75,6 +75,17 @@ describe('adjustedDaysUntilDue', () => {
     // same as medium: raw = 3, buffer = 1 → adjusted = 2
     expect(adjustedDaysUntilDue(a, TODAY)).toBe(2);
   });
+
+  test('no dueTime → no fractional component (integer result, backward-compat)', () => {
+    const a = make({ dueDate: '2026-06-04', complexity: 'short' });
+    expect(Number.isInteger(adjustedDaysUntilDue(a, TODAY))).toBe(true);
+  });
+
+  test('earlier dueTime on the same day yields a lower adjusted value', () => {
+    const early = make({ dueDate: '2026-06-01', complexity: 'short', dueTime: '09:00' });
+    const late  = make({ dueDate: '2026-06-01', complexity: 'short', dueTime: '22:00' });
+    expect(adjustedDaysUntilDue(early, TODAY)).toBeLessThan(adjustedDaysUntilDue(late, TODAY));
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -149,6 +160,14 @@ describe('pickWorkOnNext', () => {
     pickWorkOnNext(list, TODAY);
     expect(list).toEqual(copy);
   });
+
+  test('same date and complexity: earlier dueTime surfaces first', () => {
+    // Both due today (2026-06-01), same complexity and importance.
+    // 9 AM adj = 0 - 0 + 0.375 = 0.375; 10 PM adj = 0 - 0 + 0.917 ≈ 0.917.
+    const early = make({ id: 'early', dueDate: '2026-06-01', complexity: 'short', dueTime: '09:00' });
+    const late  = make({ id: 'late',  dueDate: '2026-06-01', complexity: 'short', dueTime: '22:00' });
+    expect(pickWorkOnNext([late, early], TODAY).id).toBe('early');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -211,6 +230,22 @@ describe('sortForList', () => {
     const copy = [...list];
     sortForList(list);
     expect(list).toEqual(copy);
+  });
+
+  test('on same due date, earlier dueTime appears before later dueTime', () => {
+    const date = '2026-06-05';
+    const early = make({ id: 'early', dueDate: date, complexity: 'short', dueTime: '09:00' });
+    const late  = make({ id: 'late',  dueDate: date, complexity: 'long',  dueTime: '22:00' });
+    // Time wins over complexity: 9 AM < 10 PM
+    expect(sortForList([late, early]).map(a => a.id)).toEqual(['early', 'late']);
+  });
+
+  test('on same due date, timed assignments sort before no-time ones', () => {
+    const date = '2026-06-05';
+    const timed  = make({ id: 'timed',  dueDate: date, dueTime: '09:00' });
+    const noTime = make({ id: 'notime', dueDate: date });
+    // timed 9 AM (540 min) < no-time fallback 23:59 (1439 min)
+    expect(sortForList([noTime, timed]).map(a => a.id)).toEqual(['timed', 'notime']);
   });
 
   test('missing complexity defaults to medium rank (pre-migration compat)', () => {
