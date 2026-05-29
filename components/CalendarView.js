@@ -53,10 +53,18 @@ export default function CalendarView({ assignments, onSelectAssignment }) {
     return map;
   }, [assignments, selectedDate]);
 
-  const dayItems = useMemo(
-    () => assignments.filter(a => a.dueDate === selectedDate),
-    [assignments, selectedDate]
-  );
+  const dayItems = useMemo(() => {
+    const DAY_END = 23 * 60 + 59;
+    function minsOf(dueTime) {
+      if (!dueTime || !/^\d{2}:\d{2}$/.test(dueTime)) return DAY_END;
+      const h = Number(dueTime.slice(0, 2));
+      const m = Number(dueTime.slice(3));
+      return (h > 23 || m > 59) ? DAY_END : h * 60 + m;
+    }
+    return assignments
+      .filter(a => a.dueDate === selectedDate)
+      .sort((a, b) => minsOf(a.dueTime) - minsOf(b.dueTime));
+  }, [assignments, selectedDate]);
 
   return (
     <View style={styles.container}>

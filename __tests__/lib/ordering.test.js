@@ -68,10 +68,12 @@ describe('adjustedDaysUntilDue', () => {
     expect(adjustedDaysUntilDue(a, TODAY)).toBe(-5 + NO_TIME_F);
   });
 
-  test('due today with medium complexity — buffer of 1 pulls it below zero', () => {
+  test('due today with medium complexity — same-day path uses current time', () => {
     const a = make({ dueDate: '2026-06-01', complexity: 'medium' });
-    // raw = 0, buffer = 1 → adjusted ≈ -1 + 0.9993 = -0.0007
-    expect(adjustedDaysUntilDue(a, TODAY)).toBe(-1 + NO_TIME_F);
+    // TODAY = noon (720 mins). No dueTime → 23:59 (1439 mins).
+    // (1439 - 720) / 1440 - buffer(1) = 719/1440 - 1 ≈ -0.5007
+    const todayMins = TODAY.getHours() * 60 + TODAY.getMinutes(); // 720
+    expect(adjustedDaysUntilDue(a, TODAY)).toBe((1439 - todayMins) / (24 * 60) - 1);
   });
 
   test('missing complexity defaults to medium buffer (pre-migration compat)', () => {
@@ -79,6 +81,22 @@ describe('adjustedDaysUntilDue', () => {
     delete a.complexity;
     // same as medium: raw = 3, buffer = 1 → adjusted ≈ 2.9993
     expect(adjustedDaysUntilDue(a, TODAY)).toBe(2 + NO_TIME_F);
+  });
+
+  test('same-day assignment whose time has passed scores negative (overdue)', () => {
+    // TODAY = noon; 9 AM is 3 hours past due.
+    const a = make({ dueDate: '2026-06-01', complexity: 'short', dueTime: '09:00' });
+    // (540 - 720) / 1440 - 0 = -180/1440 ≈ -0.125
+    expect(adjustedDaysUntilDue(a, TODAY)).toBeLessThan(0);
+  });
+
+  test('past-due same-day assignment surfaces ahead of a buffer-adjusted tomorrow one', () => {
+    // TODAY = noon; 9 AM short = overdue (adj ≈ -0.125).
+    // Tomorrow long with 2-day buffer: raw=1, adj = 1 - 2 + 1439/1440 ≈ -0.0007.
+    // The already-overdue assignment must be more urgent (lower score).
+    const overdueToday  = make({ id: 'ov', dueDate: '2026-06-01', complexity: 'short', dueTime: '09:00' });
+    const tomorrowLong  = make({ id: 'tl', dueDate: '2026-06-02', complexity: 'long' });
+    expect(pickWorkOnNext([tomorrowLong, overdueToday], TODAY).id).toBe('ov');
   });
 
   test('no-time rows use 23:59 fallback so a timed 9 AM is more urgent than no-time same day', () => {
