@@ -2,6 +2,7 @@ import * as Linking from 'expo-linking';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo, useState } from 'react';
 import {
+  AppState,
   FlatList,
   Pressable,
   StyleSheet,
@@ -37,6 +38,23 @@ function AppScreen() {
   const [modalVisible, setModalVisible] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [saving, setSaving] = useState(false);
+
+  // Monotonic counter that increments every 60 s and on every app-foreground
+  // event. Including it in the useMemo dependency array below ensures that
+  // time-sensitive labels ("Due today", "Overdue") and the Work-on-next
+  // recommendation stay accurate even when the app is left open across a
+  // due time or midnight without any assignment data changing.
+  const [clockTick, setClockTick] = useState(0);
+  useEffect(() => {
+    const interval = setInterval(() => setClockTick(t => t + 1), 60_000);
+    const sub = AppState.addEventListener('change', state => {
+      if (state === 'active') setClockTick(t => t + 1);
+    });
+    return () => {
+      clearInterval(interval);
+      sub.remove();
+    };
+  }, []);
 
   const userId = session?.user?.id ?? null;
   const {
@@ -177,15 +195,18 @@ function AppScreen() {
   }
 
   // Sorted/filtered views — memoized so they don't recompute on unrelated re-renders.
+  // clockTick is included so the Work-on-next recommendation and row labels
+  // refresh when the clock crosses a due time, even without data changes.
   // Ordering logic lives in lib/ordering.js so it can be unit-tested in isolation.
   const { sorted, workOnNext, incompleteCount } = useMemo(() => {
+    const now = new Date();
     const incompleteCount = assignments.filter(a => a.status !== 'completed').length;
     return {
       sorted: sortForList(assignments),
-      workOnNext: pickWorkOnNext(assignments),
+      workOnNext: pickWorkOnNext(assignments, now),
       incompleteCount,
     };
-  }, [assignments]);
+  }, [assignments, clockTick]);
 
   const editing = editingId ? assignments.find(a => a.id === editingId) ?? null : null;
 

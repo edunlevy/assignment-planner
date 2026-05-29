@@ -94,6 +94,12 @@ describe('dueDateLabel', () => {
     expect(dueDateLabel('2026-06-02', TODAY)).toEqual({ text: 'Due tomorrow', urgent: true });
   });
 
+  test('invalid dueTime (e.g. from a dirty DB row) produces no dangling "at "', () => {
+    // formatTime('bad') returns '' — the suffix must be suppressed, not "Due today at "
+    expect(dueDateLabel('2026-06-01', TODAY, 'bad')).toEqual({ text: 'Due today', urgent: true });
+    expect(dueDateLabel('2026-06-09', TODAY, 'bad')).toEqual({ text: 'Due 2026-06-09', urgent: false });
+  });
+
   test('due today at a time that has already passed → Overdue', () => {
     // today = 5 PM; assignment due at 9 AM → already past
     const FIVE_PM = new Date('2026-06-01T17:00:00');
