@@ -1,5 +1,6 @@
 import {
   dbDelete,
+  dbDeleteSeries,
   dbFetch,
   dbInsert,
   dbInsertMany,
@@ -62,6 +63,84 @@ describe('fromDb', () => {
       series_id: null,
     });
     expect(out.seriesId).toBeUndefined();
+  });
+});
+
+describe('fromDb / toDb — dueTime field', () => {
+  test('fromDb extracts dueTime when due_time is set', () => {
+    const out = fromDb({
+      id: 'r1', title: 't', class_name: 'c', due_date: '2026-01-01',
+      importance: 3, status: 'not_started', series_id: null,
+      due_time: '14:30',
+    });
+    expect(out.dueTime).toBe('14:30');
+  });
+
+  test('fromDb omits dueTime when due_time is null', () => {
+    const out = fromDb({
+      id: 'r1', title: 't', class_name: 'c', due_date: '2026-01-01',
+      importance: 3, status: 'not_started', series_id: null,
+      due_time: null,
+    });
+    expect(out.dueTime).toBeUndefined();
+  });
+
+  test('dbInsert sends due_time: null when dueTime is omitted', async () => {
+    const c = chainResolving({
+      data: {
+        id: 'new-id', title: 't', class_name: 'c', due_date: '2026-02-02',
+        importance: 3, status: 'not_started', complexity: 'medium',
+        series_id: null, due_time: null,
+      },
+      single: true,
+    });
+    supabase.from.mockReturnValueOnce(c);
+
+    await dbInsert(
+      { title: 't', course: 'c', dueDate: '2026-02-02', importance: 3, status: 'not_started', complexity: 'medium' },
+      'user-1'
+    );
+
+    expect(c.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ due_time: null })
+    );
+  });
+
+  test('dbInsert passes through a set dueTime', async () => {
+    const c = chainResolving({
+      data: {
+        id: 'new-id', title: 't', class_name: 'c', due_date: '2026-02-02',
+        importance: 3, status: 'not_started', complexity: 'medium',
+        series_id: null, due_time: '09:00',
+      },
+      single: true,
+    });
+    supabase.from.mockReturnValueOnce(c);
+
+    const result = await dbInsert(
+      { title: 't', course: 'c', dueDate: '2026-02-02', importance: 3, status: 'not_started', complexity: 'medium', dueTime: '09:00' },
+      'user-1'
+    );
+
+    expect(c.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ due_time: '09:00' })
+    );
+    expect(result.dueTime).toBe('09:00');
+  });
+
+  test('dbUpdate maps dueTime to due_time', async () => {
+    const c = chainResolving({
+      data: {
+        id: 'r1', title: 't', class_name: 'c', due_date: '2026-04-04',
+        importance: 3, status: 'not_started', series_id: null, due_time: '23:59',
+      },
+      single: true,
+    });
+    supabase.from.mockReturnValueOnce(c);
+
+    await dbUpdate('r1', 'user-1', { dueTime: '23:59' });
+
+    expect(c.update).toHaveBeenCalledWith({ due_time: '23:59' });
   });
 });
 
@@ -298,5 +377,25 @@ describe('dbDelete', () => {
       chainResolving({ error: { message: 'fail' } })
     );
     await expect(dbDelete('r1', 'u')).rejects.toEqual({ message: 'fail' });
+  });
+});
+
+describe('dbDeleteSeries', () => {
+  test('scopes delete by series_id and user_id', async () => {
+    const c = chainResolving({ data: null });
+    supabase.from.mockReturnValueOnce(c);
+
+    await dbDeleteSeries('series-1', 'user-1');
+
+    expect(c.delete).toHaveBeenCalled();
+    expect(c.eq).toHaveBeenCalledWith('series_id', 'series-1');
+    expect(c.eq).toHaveBeenCalledWith('user_id', 'user-1');
+  });
+
+  test('throws when Supabase returns an error', async () => {
+    supabase.from.mockReturnValueOnce(
+      chainResolving({ error: { message: 'fail' } })
+    );
+    await expect(dbDeleteSeries('series-1', 'u')).rejects.toEqual({ message: 'fail' });
   });
 });

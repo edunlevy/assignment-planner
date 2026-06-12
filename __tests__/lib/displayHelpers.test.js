@@ -93,4 +93,27 @@ describe('dueDateLabel', () => {
     expect(dueDateLabel('2026-06-01', TODAY)).toEqual({ text: 'Due today', urgent: true });
     expect(dueDateLabel('2026-06-02', TODAY)).toEqual({ text: 'Due tomorrow', urgent: true });
   });
+
+  test('invalid dueTime (e.g. from a dirty DB row) produces no dangling "at "', () => {
+    // formatTime('bad') returns '' — the suffix must be suppressed, not "Due today at "
+    expect(dueDateLabel('2026-06-01', TODAY, 'bad')).toEqual({ text: 'Due today', urgent: true });
+    expect(dueDateLabel('2026-06-09', TODAY, 'bad')).toEqual({ text: 'Due 2026-06-09', urgent: false });
+  });
+
+  test('due today at a time that has already passed → Overdue', () => {
+    // today = 5 PM; assignment due at 9 AM → already past
+    const FIVE_PM = new Date('2026-06-01T17:00:00');
+    expect(dueDateLabel('2026-06-01', FIVE_PM, '09:00')).toEqual({ text: 'Overdue at 9:00 AM', urgent: true });
+  });
+
+  test('due today at a time still in the future → Due today', () => {
+    // today = noon; assignment due at 5 PM → still coming up
+    expect(dueDateLabel('2026-06-01', TODAY, '17:00')).toEqual({ text: 'Due today at 5:00 PM', urgent: true });
+  });
+
+  test('due today with no time → Due today (no intraday check)', () => {
+    // today = 5 PM; no dueTime → calendar-only, still "Due today"
+    const FIVE_PM = new Date('2026-06-01T17:00:00');
+    expect(dueDateLabel('2026-06-01', FIVE_PM)).toEqual({ text: 'Due today', urgent: true });
+  });
 });

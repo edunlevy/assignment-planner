@@ -1,6 +1,17 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { complexityLabel, dueDateLabel } from '../lib/displayHelpers';
-import { STATUS_COLORS, STATUS_LABELS } from './AssignmentFormModal';
+import {
+  STATUS_COLORS,
+  STATUS_LABELS,
+  WHITE,
+  SHADOW,
+  TEXT_PRIMARY,
+  TEXT_MUTED,
+  PRIMARY,
+  URGENT,
+  BADGE_BG,
+  BORDER,
+} from '../lib/constants';
 import ImportanceBar from './ImportanceBar';
 
 // A single row in the assignment list. Tapping it opens the edit modal.
@@ -38,13 +49,13 @@ export default function AssignmentRow({ item, onPress }) {
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: WHITE,
     borderRadius: 12,
     padding: 16,
     marginBottom: 12,
     flexDirection: 'row',
     alignItems: 'center',
-    shadowColor: '#000',
+    shadowColor: SHADOW,
     shadowOpacity: 0.06,
     shadowOffset: { width: 0, height: 2 },
     shadowRadius: 6,
@@ -59,15 +70,15 @@ const styles = StyleSheet.create({
   cardTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#1A1A2E',
+    color: TEXT_PRIMARY,
   },
   cardTitleCompleted: {
     textDecorationLine: 'line-through',
-    color: '#888',
+    color: TEXT_MUTED,
   },
   cardCourse: {
     fontSize: 13,
-    color: '#3B5BDB',
+    color: PRIMARY,
     marginTop: 2,
     fontWeight: '500',
   },
@@ -80,24 +91,24 @@ const styles = StyleSheet.create({
   },
   cardDue: {
     fontSize: 12,
-    color: '#888',
+    color: TEXT_MUTED,
   },
   cardDueUrgent: {
-    color: '#EF4444',
+    color: URGENT,
     fontWeight: '600',
   },
   complexityChip: {
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 10,
-    backgroundColor: '#EEF2FF',
+    backgroundColor: BADGE_BG,
     borderWidth: 1,
-    borderColor: '#DDE2FF',
+    borderColor: BORDER,
   },
   complexityChipText: {
     fontSize: 11,
     fontWeight: '600',
-    color: '#3B5BDB',
+    color: PRIMARY,
   },
   badge: {
     borderRadius: 20,
@@ -107,7 +118,7 @@ const styles = StyleSheet.create({
   },
   badgeText: {
     fontSize: 11,
-    color: '#FFFFFF',
+    color: WHITE,
     fontWeight: '600',
   },
 });

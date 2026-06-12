@@ -1,12 +1,8 @@
-import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Modal,
-  Platform,
   Pressable,
   ScrollView,
-  StyleSheet,
   Text,
   TextInput,
   View,
@@ -15,62 +11,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DueDateField from './DueDateField';
 import DueTimeField from './DueTimeField';
 import RecurringSeriesSection from './RecurringSeriesSection';
-import { validateAssignmentForm, EMPTY_ERRORS } from '../lib/formValidation';
-
-const STATUS_LABELS = {
-  not_started: 'Not Started',
-  in_progress: 'In Progress',
-  completed: 'Completed',
-};
-
-const STATUS_COLORS = {
-  not_started: '#FF6B6B',
-  in_progress: '#FFB347',
-  completed: '#6BCB77',
-};
-
-const IMPORTANCE_HINTS = {
-  1: 'Low priority',
-  2: 'Minor',
-  3: 'Normal',
-  4: 'Important',
-  5: 'Critical — do this first!',
-};
-
-// Complexity / length gauge. Order matches the picker (Short → Medium → Long).
-// Numeric weights live in lib/ordering.js — this file only owns labels + UI.
-const COMPLEXITY_OPTIONS = [
-  { key: 'short',  label: 'Short',  hint: '< 1 hour' },
-  { key: 'medium', label: 'Medium', hint: '1–2 hours' },
-  { key: 'long',   label: 'Long',   hint: '3+ hours' },
-];
-
-const EMPTY_FORM = {
-  title: '', course: '', dueDate: '', dueTime: '', importance: 3, status: 'not_started',
-  complexity: 'medium',
-  repeatWeekly: false, repeatInterval: 1, repeatUntil: '',
-};
-
-// EMPTY_ERRORS imported from lib/formValidation
-
-function formFor(item) {
-  if (!item) return EMPTY_FORM;
-  return {
-    title: item.title,
-    course: item.course,
-    dueDate: item.dueDate,
-    dueTime: item.dueTime ?? '',
-    importance: item.importance,
-    status: item.status,
-    complexity: item.complexity ?? 'medium',
-    repeatWeekly: false,
-    repeatUntil: '',
-  };
-}
+import { STATUS_LABELS, STATUS_COLORS, COMPLEXITY_OPTIONS, PRIMARY, WHITE } from '../lib/constants';
+import { useAssignmentForm } from '../hooks/useAssignmentForm';
 
 // Modal form for creating or editing an assignment.
-// Owns its own form state; mutation effects are delegated to the parent
-// via onCreate / onCreateRecurring / onUpdate / onDelete callbacks.
+// Form state/validation/submit logic lives in useAssignmentForm; this
+// component is responsible for rendering only.
 export default function AssignmentFormModal({
   visible,
   editing,         // null = create, otherwise the assignment being edited
@@ -80,69 +26,11 @@ export default function AssignmentFormModal({
   onCreateRecurring,
   onUpdate,
   onDelete,
+  onDeleteSeries,
 }) {
   const insets = useSafeAreaInsets();
-  const [form, setForm] = useState(EMPTY_FORM);
-  const [fieldErrors, setFieldErrors] = useState(EMPTY_ERRORS);
-
-  // Reset form state when the modal opens or switches between create/edit.
-  // Effect-based so we don't issue setState during render (which Strict Mode
-  // and React 19 are stricter about). The `visible` gate ensures we only
-  // re-seed on open transitions, never while the user is mid-edit.
-  useEffect(() => {
-    if (!visible) return;
-    setForm(formFor(editing));
-    setFieldErrors(EMPTY_ERRORS);
-  }, [visible, editing?.id]);
-
-  const isEditing = !!editing;
-
-  async function handleSave() {
-    const errors = validateAssignmentForm(form, { isEditing });
-    if (errors.title || errors.course || errors.dueDate || errors.dueTime || errors.repeatUntil) {
-      setFieldErrors(errors);
-      return;
-    }
-
-    const trimmedTime = form.dueTime.trim();
-    const base = {
-      title: form.title.trim(),
-      course: form.course.trim(),
-      dueDate: form.dueDate.trim(),
-      dueTime: trimmedTime || null,
-      importance: form.importance,
-      complexity: form.complexity,
-    };
-
-    if (isEditing) {
-      await onUpdate(editing.id, { ...base, status: form.status });
-    } else if (form.repeatWeekly) {
-      await onCreateRecurring({
-        ...base,
-        repeatInterval: form.repeatInterval,
-        repeatUntil: form.repeatUntil.trim(),
-      });
-    } else {
-      await onCreate({ ...base, status: 'not_started' });
-    }
-  }
-
-  function handleDelete() {
-    const doDelete = () => onDelete(editing.id);
-    if (Platform.OS === 'web') {
-      // eslint-disable-next-line no-alert
-      if (window.confirm(`Delete "${form.title}"?`)) doDelete();
-    } else {
-      Alert.alert(
-        'Delete Assignment',
-        `Delete "${form.title}"?`,
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Delete', style: 'destructive', onPress: doDelete },
-        ]
-      );
-    }
-  }
+  const f = useAssignmentForm({ visible, editing, onCreate, onCreateRecurring, onUpdate, onDelete, onDeleteSeries });
+  const { form, fieldErrors, isEditing } = f;
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
@@ -158,10 +46,7 @@ export default function AssignmentFormModal({
               placeholder="e.g. Problem Set 4"
               autoCapitalize="words"
               value={form.title}
-              onChangeText={t => {
-                setForm(f => ({ ...f, title: t }));
-                if (fieldErrors.title) setFieldErrors(e => ({ ...e, title: '' }));
-              }}
+              onChangeText={t => f.handleChange('title', t)}
             />
             {fieldErrors.title ? <Text style={styles.errorText}>{fieldErrors.title}</Text> : null}
 
@@ -171,10 +56,7 @@ export default function AssignmentFormModal({
               placeholder="e.g. MATH 201"
               autoCapitalize="words"
               value={form.course}
-              onChangeText={t => {
-                setForm(f => ({ ...f, course: t }));
-                if (fieldErrors.course) setFieldErrors(e => ({ ...e, course: '' }));
-              }}
+              onChangeText={t => f.handleChange('course', t)}
             />
             {fieldErrors.course ? <Text style={styles.errorText}>{fieldErrors.course}</Text> : null}
 
@@ -182,10 +64,7 @@ export default function AssignmentFormModal({
             <DueDateField
               value={form.dueDate}
               hasError={!!fieldErrors.dueDate}
-              onChange={iso => {
-                setForm(f => ({ ...f, dueDate: iso }));
-                if (fieldErrors.dueDate) setFieldErrors(e => ({ ...e, dueDate: '' }));
-              }}
+              onChange={iso => f.handleChange('dueDate', iso)}
             />
             {fieldErrors.dueDate ? <Text style={styles.errorText}>{fieldErrors.dueDate}</Text> : null}
 
@@ -193,11 +72,8 @@ export default function AssignmentFormModal({
             <DueTimeField
               value={form.dueTime}
               hasError={!!fieldErrors.dueTime}
-              onChange={t => {
-                setForm(f => ({ ...f, dueTime: t }));
-                if (fieldErrors.dueTime) setFieldErrors(e => ({ ...e, dueTime: '' }));
-              }}
-              onClear={() => setForm(f => ({ ...f, dueTime: '' }))}
+              onChange={t => f.handleChange('dueTime', t)}
+              onClear={f.clearDueTime}
             />
             {fieldErrors.dueTime ? <Text style={styles.errorText}>{fieldErrors.dueTime}</Text> : null}
 
@@ -210,7 +86,7 @@ export default function AssignmentFormModal({
                     styles.importanceButton,
                     form.importance === n && styles.importanceButtonSelected,
                   ]}
-                  onPress={() => setForm(f => ({ ...f, importance: n }))}
+                  onPress={() => f.handleChange('importance', n)}
                 >
                   <Text
                     style={[
@@ -223,7 +99,7 @@ export default function AssignmentFormModal({
                 </Pressable>
               ))}
             </View>
-            <Text style={styles.importanceHint}>{IMPORTANCE_HINTS[form.importance]}</Text>
+            <Text style={styles.importanceHint}>{f.importanceHint}</Text>
 
             <Text style={styles.label}>Complexity / length</Text>
             <View style={styles.statusRow}>
@@ -233,11 +109,11 @@ export default function AssignmentFormModal({
                   style={[
                     styles.statusButton,
                     form.complexity === key && {
-                      backgroundColor: '#3B5BDB',
-                      borderColor: '#3B5BDB',
+                      backgroundColor: PRIMARY,
+                      borderColor: PRIMARY,
                     },
                   ]}
-                  onPress={() => setForm(f => ({ ...f, complexity: key }))}
+                  onPress={() => f.handleChange('complexity', key)}
                 >
                   <Text
                     style={[
@@ -261,12 +137,9 @@ export default function AssignmentFormModal({
                 repeatUntil={form.repeatUntil}
                 dueDate={form.dueDate}
                 repeatUntilError={fieldErrors.repeatUntil}
-                onToggle={() => setForm(f => ({ ...f, repeatWeekly: !f.repeatWeekly, repeatInterval: 1, repeatUntil: '' }))}
-                onIntervalChange={n => setForm(f => ({ ...f, repeatInterval: n }))}
-                onRepeatUntilChange={iso => {
-                  setForm(f => ({ ...f, repeatUntil: iso }));
-                  if (fieldErrors.repeatUntil) setFieldErrors(e => ({ ...e, repeatUntil: '' }));
-                }}
+                onToggle={f.toggleRecurring}
+                onIntervalChange={n => f.handleChange('repeatInterval', n)}
+                onRepeatUntilChange={iso => f.handleChange('repeatUntil', iso)}
               />
             )}
 
@@ -284,7 +157,7 @@ export default function AssignmentFormModal({
                           borderColor: STATUS_COLORS[key],
                         },
                       ]}
-                      onPress={() => setForm(f => ({ ...f, status: key }))}
+                      onPress={() => f.handleChange('status', key)}
                     >
                       <Text
                         style={[
@@ -302,11 +175,11 @@ export default function AssignmentFormModal({
 
             <Pressable
               style={[styles.saveButton, saving && { opacity: 0.6 }]}
-              onPress={handleSave}
+              onPress={f.handleSubmit}
               disabled={saving}
             >
               {saving
-                ? <ActivityIndicator color="#fff" />
+                ? <ActivityIndicator color={WHITE} />
                 : <Text style={styles.saveButtonText}>
                     {isEditing ? 'Save Changes' : 'Save Assignment'}
                   </Text>
@@ -316,10 +189,20 @@ export default function AssignmentFormModal({
             {isEditing && (
               <Pressable
                 style={[styles.deleteButton, saving && { opacity: 0.4 }]}
-                onPress={handleDelete}
+                onPress={f.handleDelete}
                 disabled={saving}
               >
                 <Text style={styles.deleteButtonText}>Delete Assignment</Text>
+              </Pressable>
+            )}
+
+            {f.hasSeries && isEditing && (
+              <Pressable
+                style={[styles.deleteButton, saving && { opacity: 0.4 }]}
+                onPress={f.handleDeleteSeries}
+                disabled={saving}
+              >
+                <Text style={styles.deleteButtonText}>Delete Entire Series</Text>
               </Pressable>
             )}
 
@@ -331,132 +214,4 @@ export default function AssignmentFormModal({
     </Modal>
   );
 }
-
-export { STATUS_LABELS, STATUS_COLORS, COMPLEXITY_OPTIONS };
-
-const styles = StyleSheet.create({
-  modalSheet: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-    padding: 24,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#1A1A2E',
-    marginBottom: 20,
-  },
-  label: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#555',
-    marginBottom: 6,
-    marginTop: 12,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: '#DDE2FF',
-    borderRadius: 10,
-    padding: 12,
-    fontSize: 15,
-    color: '#1A1A2E',
-    backgroundColor: '#F8F9FF',
-  },
-  inputError: {
-    borderColor: '#FF6B6B',
-    backgroundColor: '#FFF5F5',
-  },
-  errorText: {
-    color: '#FF6B6B',
-    fontSize: 12,
-    marginTop: 4,
-  },
-  importanceRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 4,
-  },
-  importanceButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    borderWidth: 2,
-    borderColor: '#DDE2FF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#F8F9FF',
-  },
-  importanceButtonSelected: {
-    backgroundColor: '#3B5BDB',
-    borderColor: '#3B5BDB',
-  },
-  importanceButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#3B5BDB',
-  },
-  importanceButtonTextSelected: {
-    color: '#FFFFFF',
-  },
-  importanceHint: {
-    fontSize: 12,
-    color: '#888',
-    marginTop: 6,
-  },
-  statusRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 4,
-    flexWrap: 'wrap',
-  },
-  statusButton: {
-    borderRadius: 20,
-    borderWidth: 2,
-    borderColor: '#DDE2FF',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    backgroundColor: '#F8F9FF',
-  },
-  statusButtonText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#555',
-  },
-  statusButtonTextSelected: {
-    color: '#FFFFFF',
-  },
-  saveButton: {
-    backgroundColor: '#3B5BDB',
-    borderRadius: 12,
-    padding: 16,
-    alignItems: 'center',
-    marginTop: 24,
-  },
-  saveButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-    fontSize: 16,
-  },
-  deleteButton: {
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: '#FF6B6B',
-    padding: 14,
-    alignItems: 'center',
-    marginTop: 10,
-  },
-  deleteButtonText: {
-    color: '#FF6B6B',
-    fontWeight: '700',
-    fontSize: 15,
-  },
-  cancelButton: {
-    alignItems: 'center',
-    marginTop: 12,
-    padding: 8,
-  },
-  cancelButtonText: {
-    color: '#888',
-    fontSize: 15,
-  },
-});
+import { styles } from './AssignmentFormModal.styles';

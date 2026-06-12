@@ -169,4 +169,19 @@ describe('buildWeeklySeries', () => {
       '2026-03-15',
     ]);
   });
+
+  test('crosses the Feb 29 leap day without skipping or doubling a week', () => {
+    // 2028 is a leap year. Feb 22 + 7 days = Feb 29; Feb 29 + 7 days = Mar 7.
+    const drafts = buildWeeklySeries({
+      startISO: '2028-02-22',
+      untilISO: '2028-03-07',
+      base: { title: 'x', course: 'y' },
+      seriesId: 's',
+    });
+    expect(drafts.map(d => d.dueDate)).toEqual([
+      '2028-02-22',
+      '2028-02-29',
+      '2028-03-07',
+    ]);
+  });
 });

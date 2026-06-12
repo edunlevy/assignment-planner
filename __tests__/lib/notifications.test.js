@@ -7,6 +7,7 @@ import {
   cancelReminders,
   currentDeviceTimezone,
   detectTimezoneChanged,
+  getAllScheduledNotificationIds,
   loadReminderIdsFor,
   loadReminderMap,
   loadStoredTimezone,
@@ -193,6 +194,41 @@ describe('cancelReminders / cancelAllReminders', () => {
   test('cancelAllReminders calls the bulk API', async () => {
     await cancelAllReminders();
     expect(Notifications.cancelAllScheduledNotificationsAsync).toHaveBeenCalled();
+  });
+});
+
+describe('getAllScheduledNotificationIds', () => {
+  test('maps scheduled notifications to their identifiers', async () => {
+    Notifications.getAllScheduledNotificationsAsync.mockResolvedValueOnce([
+      { identifier: 'n1' },
+      { identifier: 'n2' },
+    ]);
+    expect(await getAllScheduledNotificationIds()).toEqual(['n1', 'n2']);
+  });
+
+  test('filters out entries with no identifier', async () => {
+    Notifications.getAllScheduledNotificationsAsync.mockResolvedValueOnce([
+      { identifier: 'n1' },
+      { identifier: null },
+      {},
+    ]);
+    expect(await getAllScheduledNotificationIds()).toEqual(['n1']);
+  });
+
+  test('returns [] on web without calling the API', async () => {
+    Platform.OS = 'web';
+    expect(await getAllScheduledNotificationIds()).toEqual([]);
+    expect(Notifications.getAllScheduledNotificationsAsync).not.toHaveBeenCalled();
+  });
+
+  test('returns [] if the OS call throws', async () => {
+    Notifications.getAllScheduledNotificationsAsync.mockRejectedValueOnce(new Error('boom'));
+    expect(await getAllScheduledNotificationIds()).toEqual([]);
+  });
+
+  test('returns [] if the OS call resolves non-array', async () => {
+    Notifications.getAllScheduledNotificationsAsync.mockResolvedValueOnce(null);
+    expect(await getAllScheduledNotificationIds()).toEqual([]);
   });
 });
 

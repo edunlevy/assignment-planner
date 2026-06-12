@@ -47,6 +47,13 @@ jest.mock('react-native', () => ({
 
   // Dimensions — used by SafeAreaContext internally
   Dimensions: { get: jest.fn(() => ({ width: 375, height: 812 })) },
+
+  // useColorScheme — used by expo-status-bar's <StatusBar> (rendered by App.js).
+  useColorScheme: jest.fn(() => 'light'),
+
+  // StatusBar — expo-status-bar's NativeStatusBarWrapper renders <StatusBar>
+  // from react-native directly when not running on web.
+  StatusBar: 'StatusBar',
 }));
 
 // AsyncStorage: in-memory implementation that matches the official mock's
@@ -92,6 +99,23 @@ jest.mock('expo-notifications', () => ({
     MONTHLY: 'monthly',
     YEARLY: 'yearly',
   },
+}));
+
+// @react-native-community/datetimepicker: native module used by DueDateField
+// and DueTimeField. Stub as a passthrough so components that import those
+// fields don't crash in the node test environment.
+jest.mock('@react-native-community/datetimepicker', () => ({
+  default: 'DateTimePicker',
+  __esModule: true,
+}));
+
+// react-native-safe-area-context: uses native modules; stub the values and
+// provider so renderWithProviders doesn't crash in a node test environment.
+jest.mock('react-native-safe-area-context', () => ({
+  SafeAreaProvider: ({ children }) => children,
+  SafeAreaView: 'SafeAreaView',
+  useSafeAreaInsets: jest.fn(() => ({ top: 0, bottom: 0, left: 0, right: 0 })),
+  useSafeAreaFrame: jest.fn(() => ({ x: 0, y: 0, width: 375, height: 812 })),
 }));
 
 // expo-linking: only the helpers the app actually calls.
@@ -173,3 +197,4 @@ jest.mock('./lib/supabase', () => {
     },
   };
 });
+

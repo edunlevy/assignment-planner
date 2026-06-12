@@ -2,7 +2,16 @@ import { useMemo, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Calendar } from 'react-native-calendars';
 
-import { STATUS_COLORS, STATUS_LABELS } from './AssignmentFormModal';
+import {
+  STATUS_COLORS,
+  STATUS_LABELS,
+  PRIMARY,
+  WHITE,
+  SHADOW,
+  SURFACE_HIGHLIGHT,
+  TEXT_PRIMARY,
+  TEXT_MUTED,
+} from '../lib/constants';
 import { formatTime } from '../lib/displayHelpers';
 
 function todayISO() {
@@ -41,22 +50,30 @@ export default function CalendarView({ assignments, onSelectAssignment }) {
       const dots = map[a.dueDate]?.dots ?? [];
       // Cap dots per day to keep the marker readable.
       if (dots.length < 4) {
-        dots.push({ key: a.id, color: STATUS_COLORS[a.status] ?? '#3B5BDB' });
+        dots.push({ key: a.id, color: STATUS_COLORS[a.status] ?? PRIMARY });
       }
       map[a.dueDate] = { dots };
     }
     if (map[selectedDate]) {
-      map[selectedDate] = { ...map[selectedDate], selected: true, selectedColor: '#3B5BDB' };
+      map[selectedDate] = { ...map[selectedDate], selected: true, selectedColor: PRIMARY };
     } else {
-      map[selectedDate] = { selected: true, selectedColor: '#3B5BDB' };
+      map[selectedDate] = { selected: true, selectedColor: PRIMARY };
     }
     return map;
   }, [assignments, selectedDate]);
 
-  const dayItems = useMemo(
-    () => assignments.filter(a => a.dueDate === selectedDate),
-    [assignments, selectedDate]
-  );
+  const dayItems = useMemo(() => {
+    const DAY_END = 23 * 60 + 59;
+    function minsOf(dueTime) {
+      if (!dueTime || !/^\d{2}:\d{2}$/.test(dueTime)) return DAY_END;
+      const h = Number(dueTime.slice(0, 2));
+      const m = Number(dueTime.slice(3));
+      return (h > 23 || m > 59) ? DAY_END : h * 60 + m;
+    }
+    return assignments
+      .filter(a => a.dueDate === selectedDate)
+      .sort((a, b) => minsOf(a.dueTime) - minsOf(b.dueTime));
+  }, [assignments, selectedDate]);
 
   return (
     <View style={styles.container}>
@@ -68,9 +85,9 @@ export default function CalendarView({ assignments, onSelectAssignment }) {
         onDayPress={day => setSelectedDate(day.dateString)}
         onMonthChange={month => setCalendarMonth(month.dateString)}
         theme={{
-          todayTextColor: '#3B5BDB',
-          arrowColor: '#3B5BDB',
-          selectedDayBackgroundColor: '#3B5BDB',
+          todayTextColor: PRIMARY,
+          arrowColor: PRIMARY,
+          selectedDayBackgroundColor: PRIMARY,
         }}
       />
 
@@ -129,12 +146,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: '#3B5BDB',
+    backgroundColor: PRIMARY,
   },
   todayButtonText: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#FFFFFF',
+    color: WHITE,
   },
   pill: {
     alignSelf: 'center',
@@ -142,11 +159,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 4,
     borderRadius: 999,
-    backgroundColor: '#E8ECFF',
+    backgroundColor: SURFACE_HIGHLIGHT,
   },
   pillText: {
     fontSize: 12,
-    color: '#3B5BDB',
+    color: PRIMARY,
     fontWeight: '600',
   },
   list: {
@@ -155,36 +172,36 @@ const styles = StyleSheet.create({
     paddingBottom: 120,
   },
   row: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: WHITE,
     borderRadius: 12,
     padding: 14,
     marginBottom: 10,
     flexDirection: 'row',
     alignItems: 'center',
-    shadowColor: '#000',
+    shadowColor: SHADOW,
     shadowOpacity: 0.06,
     shadowOffset: { width: 0, height: 2 },
     shadowRadius: 6,
     elevation: 2,
   },
   rowBody: { flex: 1 },
-  rowTitle: { fontSize: 15, fontWeight: '600', color: '#1A1A2E' },
+  rowTitle: { fontSize: 15, fontWeight: '600', color: TEXT_PRIMARY },
   rowTitleCompleted: {
     textDecorationLine: 'line-through',
-    color: '#888',
+    color: TEXT_MUTED,
   },
-  rowCourse: { fontSize: 12, color: '#3B5BDB', marginTop: 2, fontWeight: '500' },
-  rowTime: { fontSize: 11, color: '#888', marginTop: 2 },
+  rowCourse: { fontSize: 12, color: PRIMARY, marginTop: 2, fontWeight: '500' },
+  rowTime: { fontSize: 11, color: TEXT_MUTED, marginTop: 2 },
   badge: {
     borderRadius: 20,
     paddingHorizontal: 10,
     paddingVertical: 4,
     marginLeft: 10,
   },
-  badgeText: { fontSize: 11, color: '#FFFFFF', fontWeight: '600' },
+  badgeText: { fontSize: 11, color: WHITE, fontWeight: '600' },
   empty: {
     textAlign: 'center',
-    color: '#888',
+    color: TEXT_MUTED,
     fontSize: 13,
     marginTop: 20,
   },

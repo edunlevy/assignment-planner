@@ -2,6 +2,15 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { formatTime } from '../lib/displayHelpers';
+import {
+  BORDER,
+  TEXT_PRIMARY,
+  TEXT_PLACEHOLDER,
+  SURFACE_TINT,
+  DANGER,
+  DANGER_BG,
+  PRIMARY,
+} from '../lib/constants';
 
 // Parses a stored "HH:MM" string into a Date object for the native picker.
 function parseStoredTime(value) {
@@ -116,47 +125,47 @@ const styles = StyleSheet.create({
   webInput: {
     flex: 1,
     borderWidth: 1,
-    borderColor: '#DDE2FF',
+    borderColor: BORDER,
     borderRadius: 10,
     padding: 12,
     fontSize: 15,
-    color: '#1A1A2E',
-    backgroundColor: '#F8F9FF',
+    color: TEXT_PRIMARY,
+    backgroundColor: SURFACE_TINT,
   },
   field: {
     borderWidth: 1,
-    borderColor: '#DDE2FF',
+    borderColor: BORDER,
     borderRadius: 10,
     padding: 12,
-    backgroundColor: '#F8F9FF',
+    backgroundColor: SURFACE_TINT,
   },
   fieldError: {
-    borderColor: '#FF6B6B',
-    backgroundColor: '#FFF5F5',
+    borderColor: DANGER,
+    backgroundColor: DANGER_BG,
   },
   valueText: {
     fontSize: 15,
-    color: '#1A1A2E',
+    color: TEXT_PRIMARY,
   },
   placeholderText: {
     fontSize: 15,
-    color: '#9AA0B4',
+    color: TEXT_PLACEHOLDER,
   },
   clearButton: {
     paddingHorizontal: 10,
     paddingVertical: 8,
   },
   clearText: {
-    color: '#3B5BDB',
+    color: PRIMARY,
     fontWeight: '600',
     fontSize: 14,
   },
   iosPickerWrap: {
     marginTop: 8,
-    backgroundColor: '#F8F9FF',
+    backgroundColor: SURFACE_TINT,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#DDE2FF',
+    borderColor: BORDER,
     overflow: 'hidden',
   },
   doneButton: {
@@ -165,7 +174,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   doneButtonText: {
-    color: '#3B5BDB',
+    color: PRIMARY,
     fontWeight: '600',
     fontSize: 15,
   },

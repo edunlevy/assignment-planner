@@ -19,11 +19,13 @@ vi.mock('../../lib/assignmentsDb', () => ({
   dbInsertMany: vi.fn(),
   dbUpdate: vi.fn(),
   dbDelete: vi.fn(),
+  dbDeleteSeries: vi.fn(),
 }));
 
 import { useAssignments } from '../../hooks/useAssignments';
 import {
   dbDelete,
+  dbDeleteSeries,
   dbFetch,
   dbInsert,
   dbInsertMany,
@@ -43,6 +45,10 @@ const NOW = new Date('2026-05-15T08:00:00').getTime();
 // default mock so `cb` is stashed for tests that need to simulate realtime
 // events (e.g. own-echo suppression).
 let realtimeCallback = null;
+
+// Captured subscribe() status callback. The hook calls
+// .subscribe((status, err) => ...) to surface channel errors into syncError.
+let subscribeStatusCallback = null;
 
 // Dispatch a realtime event as if it came from Supabase, then flush.
 async function emitRealtime(payload) {
@@ -64,6 +70,7 @@ beforeEach(async () => {
   dbInsertMany.mockReset();
   dbUpdate.mockReset();
   dbDelete.mockReset();
+  dbDeleteSeries.mockReset();
 
   Notifications.scheduleNotificationAsync.mockReset();
   Notifications.scheduleNotificationAsync.mockResolvedValue('notif-id');
@@ -76,6 +83,7 @@ beforeEach(async () => {
 
   // Re-wire supabase.channel to capture the realtime callback.
   realtimeCallback = null;
+  subscribeStatusCallback = null;
   supabase.channel.mockReset();
   supabase.channel.mockImplementation(() => {
     const ch = {
@@ -83,7 +91,10 @@ beforeEach(async () => {
         realtimeCallback = cb;
         return ch;
       }),
-      subscribe: vi.fn(() => ch),
+      subscribe: vi.fn(statusCb => {
+        subscribeStatusCallback = statusCb;
+        return ch;
+      }),
       unsubscribe: vi.fn(async () => {}),
     };
     return ch;
@@ -435,6 +446,50 @@ describe('update', () => {
     expect(result.current.assignments[0].reminderIds).toEqual(reminderIdsBeforeEcho);
     expect(Notifications.scheduleNotificationAsync.mock.calls.length).toBe(scheduleCallsBeforeEcho);
   });
+
+  test('self-mutation TTL expiry: an UPDATE echo with the same signature is applied once the 8s marker TTL elapses', async () => {
+    const { result } = await mountHook();
+    const row = await seedOneAssignment(result);
+
+    const updatedRow = { ...row, title: 'After update', importance: 5 };
+    dbUpdate.mockResolvedValue(updatedRow);
+
+    Notifications.scheduleNotificationAsync
+      .mockResolvedValueOnce('new-24h')
+      .mockResolvedValueOnce('new-1h');
+
+    await act(async () => {
+      await result.current.update(row.id, { title: 'After update', importance: 5 });
+    });
+
+    // The marker was settled at NOW with expiresAt = NOW + 8000ms. Advance the
+    // clock past the TTL so the marker is considered expired. isOwnEcho will
+    // then delete it and treat the matching-signature echo as a genuine remote
+    // event that must be reconciled (not suppressed).
+    Date.now.mockReturnValue(NOW + 8001);
+
+    Notifications.cancelScheduledNotificationAsync.mockClear();
+    Notifications.scheduleNotificationAsync.mockReset();
+    Notifications.scheduleNotificationAsync
+      .mockResolvedValueOnce('echo-24h')
+      .mockResolvedValueOnce('echo-1h');
+
+    // Same-signature echo arrives AFTER the TTL — it is no longer ours.
+    await emitRealtime({
+      eventType: 'UPDATE',
+      new: updatedRow,
+      old: row,
+    });
+
+    // The echo went through: the upsert reconcile cancelled the old reminders
+    // and scheduled fresh ones, leaving the new reminder ids on the row.
+    expect(Notifications.scheduleNotificationAsync).toHaveBeenCalled();
+    expect(result.current.assignments[0].reminderIds).toEqual(['echo-24h', 'echo-1h']);
+    expect(result.current.assignments[0].title).toBe('After update');
+
+    const map = JSON.parse(await AsyncStorage.getItem(`reminder_ids_${USER_ID}`));
+    expect(map[row.id].ids).toEqual(['echo-24h', 'echo-1h']);
+  });
 });
 
 // ===========================================================================
@@ -527,6 +582,243 @@ describe('remove', () => {
 
     // State is still empty; no crash.
     expect(result.current.assignments).toEqual([]);
+  });
+});
+
+// ===========================================================================
+// removeSeries
+// ===========================================================================
+describe('removeSeries', () => {
+  async function seedSeries(result) {
+    dbInsertMany.mockImplementation(async drafts => drafts.map(d => ({ ...d })));
+    Notifications.scheduleNotificationAsync
+      .mockResolvedValueOnce('s1-24h').mockResolvedValueOnce('s1-1h')
+      .mockResolvedValueOnce('s2-24h').mockResolvedValueOnce('s2-1h');
+
+    const seriesId = 'series-1';
+    const drafts = [
+      { ...VALID_DRAFT, title: 'Week 1', dueDate: '2026-05-20', seriesId },
+      { ...VALID_DRAFT, title: 'Week 2', dueDate: '2026-05-27', seriesId },
+    ];
+
+    let saved;
+    await act(async () => {
+      saved = await result.current.insertMany(drafts);
+    });
+
+    Notifications.cancelScheduledNotificationAsync.mockClear();
+    return { seriesId, saved };
+  }
+
+  test('happy path: dbDeleteSeries called, both rows removed, reminders cancelled, map cleared', async () => {
+    dbDeleteSeries.mockResolvedValue(undefined);
+    const { result } = await mountHook();
+    const { seriesId, saved } = await seedSeries(result);
+
+    expect(result.current.assignments).toHaveLength(2);
+
+    await act(async () => {
+      await result.current.removeSeries(seriesId);
+    });
+
+    expect(dbDeleteSeries).toHaveBeenCalledWith(seriesId, USER_ID);
+
+    expect(result.current.assignments).toEqual([]);
+
+    expect(Notifications.cancelScheduledNotificationAsync).toHaveBeenCalledWith('s1-24h');
+    expect(Notifications.cancelScheduledNotificationAsync).toHaveBeenCalledWith('s1-1h');
+    expect(Notifications.cancelScheduledNotificationAsync).toHaveBeenCalledWith('s2-24h');
+    expect(Notifications.cancelScheduledNotificationAsync).toHaveBeenCalledWith('s2-1h');
+
+    const map = JSON.parse(await AsyncStorage.getItem(`reminder_ids_${USER_ID}`));
+    expect(map[saved[0].id]).toBeUndefined();
+    expect(map[saved[1].id]).toBeUndefined();
+  });
+
+  test('DB error: rejects, state and reminder map unchanged', async () => {
+    dbDeleteSeries.mockRejectedValue(new Error('series delete failed'));
+    const { result } = await mountHook();
+    const { seriesId, saved } = await seedSeries(result);
+
+    await act(async () => {
+      await expect(result.current.removeSeries(seriesId)).rejects.toThrow('series delete failed');
+    });
+
+    expect(result.current.assignments).toHaveLength(2);
+    expect(Notifications.cancelScheduledNotificationAsync).not.toHaveBeenCalled();
+
+    const map = JSON.parse(await AsyncStorage.getItem(`reminder_ids_${USER_ID}`));
+    expect(map[saved[0].id].ids).toEqual(['s1-24h', 's1-1h']);
+    expect(map[saved[1].id].ids).toEqual(['s2-24h', 's2-1h']);
+  });
+
+  test('tombstone: a realtime UPDATE for one of the deleted ids is dropped after removeSeries', async () => {
+    dbDeleteSeries.mockResolvedValue(undefined);
+    const { result } = await mountHook();
+    const { seriesId, saved } = await seedSeries(result);
+
+    await act(async () => {
+      await result.current.removeSeries(seriesId);
+    });
+    expect(result.current.assignments).toEqual([]);
+
+    const row = saved[0];
+    await emitRealtime({
+      eventType: 'UPDATE',
+      new: { ...row, title: 'Stale' },
+      old: row,
+    });
+
+    expect(result.current.assignments).toEqual([]);
+  });
+
+  test('no-op when no assignments match the seriesId', async () => {
+    const { result } = await mountHook();
+
+    let returned;
+    await act(async () => {
+      returned = await result.current.removeSeries('nonexistent-series');
+    });
+
+    expect(returned).toBeUndefined();
+    expect(dbDeleteSeries).not.toHaveBeenCalled();
+    expect(result.current.assignments).toEqual([]);
+  });
+});
+
+// ===========================================================================
+// Realtime subscription status / error handling
+// ===========================================================================
+describe('realtime subscription status', () => {
+  test('CHANNEL_ERROR status surfaces a syncError and does not throw', async () => {
+    const { result } = await mountHook();
+
+    expect(typeof subscribeStatusCallback).toBe('function');
+    expect(result.current.syncError).toBe('');
+
+    await act(async () => {
+      subscribeStatusCallback('CHANNEL_ERROR', undefined);
+      await flushMicrotasks();
+    });
+
+    expect(result.current.syncError).toMatch(/sync/i);
+  });
+
+  test('a non-null err from subscribe surfaces a syncError', async () => {
+    const { result } = await mountHook();
+
+    await act(async () => {
+      subscribeStatusCallback('TIMED_OUT', new Error('boom'));
+      await flushMicrotasks();
+    });
+
+    expect(result.current.syncError).not.toBe('');
+  });
+
+  test('SUBSCRIBED status leaves syncError untouched', async () => {
+    const { result } = await mountHook();
+
+    await act(async () => {
+      subscribeStatusCallback('SUBSCRIBED', undefined);
+      await flushMicrotasks();
+    });
+
+    expect(result.current.syncError).toBe('');
+  });
+});
+
+// ===========================================================================
+// Per-id queue serialization
+// ===========================================================================
+describe('per-id queue serialization', () => {
+  // Helper mirrors the update describe block's seed.
+  async function seedOneAssignment(result, overrides = {}) {
+    dbInsertEchoesBack();
+    Notifications.scheduleNotificationAsync
+      .mockResolvedValueOnce('old-24h')
+      .mockResolvedValueOnce('old-1h');
+    let inserted;
+    await act(async () => {
+      inserted = await result.current.insert({ ...VALID_DRAFT, ...overrides });
+    });
+    Notifications.scheduleNotificationAsync.mockReset();
+    Notifications.scheduleNotificationAsync.mockResolvedValue('notif-id');
+    Notifications.cancelScheduledNotificationAsync.mockClear();
+    return inserted;
+  }
+
+  test('two un-awaited update() calls on the same id serialize their ENTIRE async workflow', async () => {
+    const { result } = await mountHook();
+    const row = await seedOneAssignment(result);
+
+    // Shared event log proving ordering. We assert that the SECOND dbUpdate
+    // does not start until the FIRST call's full enqueued chain (reminder
+    // scheduling + map save + commit) has finished — not merely until the
+    // first dbUpdate promise resolved.
+    const events = [];
+
+    // Gate the first dbUpdate so its promise stays pending until we release it.
+    let releaseFirst;
+    const firstGate = new Promise(resolve => { releaseFirst = resolve; });
+
+    dbUpdate.mockImplementation(async (id, _userId, changes) => {
+      if (changes.title === 'A') {
+        events.push('dbUpdate-A-start');
+        await firstGate;
+        events.push('dbUpdate-A-resolve');
+        return { ...row, ...changes };
+      }
+      events.push('dbUpdate-B-start');
+      return { ...row, ...changes };
+    });
+
+    // saveReminderMap (called near the END of each update's chain) writes the
+    // reminder-map key to AsyncStorage. Tagging that write lets us prove call
+    // A's WHOLE workflow finished before B started — not merely that A's
+    // dbUpdate promise resolved. We delegate to the original mock impl (the
+    // in-memory store) so the real write still happens; capturing it via
+    // getMockImplementation avoids re-entering the spy (no recursion).
+    const mapKey = `reminder_ids_${USER_ID}`;
+    const origSetItem = AsyncStorage.setItem.getMockImplementation();
+    const spy = vi.spyOn(AsyncStorage, 'setItem').mockImplementation(async (key, val) => {
+      if (key === mapKey) {
+        const m = JSON.parse(val);
+        if (m[row.id]?.sig) events.push('mapSave');
+      }
+      return origSetItem(key, val);
+    });
+
+    await act(async () => {
+      // Fire BOTH without awaiting between them.
+      const pA = result.current.update(row.id, { title: 'A' });
+      const pB = result.current.update(row.id, { title: 'B' });
+
+      // Let the queue advance: A should have started, B must be blocked
+      // behind the queue (its dbUpdate not yet called).
+      await flushMicrotasks();
+      expect(events).toContain('dbUpdate-A-start');
+      expect(events).not.toContain('dbUpdate-B-start');
+
+      // Release A; now its full chain runs, THEN B begins.
+      releaseFirst();
+      await Promise.all([pA, pB]);
+    });
+
+    spy.mockRestore();
+
+    // The serialized order: A starts, A's whole chain (incl. map save) finishes,
+    // and only THEN does B's dbUpdate start.
+    const aStart = events.indexOf('dbUpdate-A-start');
+    const aMapSave = events.indexOf('mapSave');
+    const bStart = events.indexOf('dbUpdate-B-start');
+
+    expect(aStart).toBeGreaterThanOrEqual(0);
+    expect(aMapSave).toBeGreaterThan(aStart);
+    expect(bStart).toBeGreaterThan(aMapSave);
+
+    // Final state reflects the LAST write (B) — proving both ran in order.
+    expect(result.current.assignments[0].title).toBe('B');
+    expect(dbUpdate).toHaveBeenCalledTimes(2);
   });
 });
 

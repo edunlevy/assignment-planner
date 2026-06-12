@@ -1,0 +1,139 @@
+import { StyleSheet } from 'react-native';
+import {
+  WHITE,
+  PRIMARY,
+  TEXT_PRIMARY,
+  TEXT_SECONDARY,
+  TEXT_MUTED,
+  BORDER,
+  SURFACE_TINT,
+  DANGER,
+  DANGER_BG,
+} from '../lib/constants';
+
+export const styles = StyleSheet.create({
+  modalSheet: {
+    flex: 1,
+    backgroundColor: WHITE,
+    padding: 24,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: TEXT_PRIMARY,
+    marginBottom: 20,
+  },
+  label: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: TEXT_SECONDARY,
+    marginBottom: 6,
+    marginTop: 12,
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: BORDER,
+    borderRadius: 10,
+    padding: 12,
+    fontSize: 15,
+    color: TEXT_PRIMARY,
+    backgroundColor: SURFACE_TINT,
+  },
+  inputError: {
+    borderColor: DANGER,
+    backgroundColor: DANGER_BG,
+  },
+  errorText: {
+    color: DANGER,
+    fontSize: 12,
+    marginTop: 4,
+  },
+  importanceRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 4,
+  },
+  importanceButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 2,
+    borderColor: BORDER,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: SURFACE_TINT,
+  },
+  importanceButtonSelected: {
+    backgroundColor: PRIMARY,
+    borderColor: PRIMARY,
+  },
+  importanceButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: PRIMARY,
+  },
+  importanceButtonTextSelected: {
+    color: WHITE,
+  },
+  importanceHint: {
+    fontSize: 12,
+    color: TEXT_MUTED,
+    marginTop: 6,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 4,
+    flexWrap: 'wrap',
+  },
+  statusButton: {
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: BORDER,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    backgroundColor: SURFACE_TINT,
+  },
+  statusButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: TEXT_SECONDARY,
+  },
+  statusButtonTextSelected: {
+    color: WHITE,
+  },
+  saveButton: {
+    backgroundColor: PRIMARY,
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'center',
+    marginTop: 24,
+  },
+  saveButtonText: {
+    color: WHITE,
+    fontWeight: '700',
+    fontSize: 16,
+  },
+  deleteButton: {
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: DANGER,
+    padding: 14,
+    alignItems: 'center',
+    marginTop: 10,
+  },
+  deleteButtonText: {
+    color: DANGER,
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  cancelButton: {
+    alignItems: 'center',
+    marginTop: 12,
+    padding: 8,
+  },
+  cancelButtonText: {
+    color: TEXT_MUTED,
+    fontSize: 15,
+  },
+});

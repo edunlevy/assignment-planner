@@ -2,6 +2,15 @@ import { parseISO } from 'date-fns';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import DueDateField from './DueDateField';
 import { isValidDate } from '../lib/assignment';
+import {
+  PRIMARY,
+  WHITE,
+  TEXT_PRIMARY,
+  TEXT_SECONDARY,
+  BORDER,
+  SURFACE_TINT,
+  DANGER,
+} from '../lib/constants';
 
 const INTERVAL_OPTIONS = [
   { value: 1, label: 'Weekly' },
@@ -91,17 +100,17 @@ const styles = StyleSheet.create({
     height: 22,
     borderRadius: 5,
     borderWidth: 2,
-    borderColor: '#DDE2FF',
-    backgroundColor: '#F8F9FF',
+    borderColor: BORDER,
+    backgroundColor: SURFACE_TINT,
     alignItems: 'center',
     justifyContent: 'center',
   },
   checkboxChecked: {
-    backgroundColor: '#3B5BDB',
-    borderColor: '#3B5BDB',
+    backgroundColor: PRIMARY,
+    borderColor: PRIMARY,
   },
   checkmark: {
-    color: '#FFFFFF',
+    color: WHITE,
     fontSize: 13,
     fontWeight: '700',
     lineHeight: 16,
@@ -109,7 +118,7 @@ const styles = StyleSheet.create({
   repeatToggleLabel: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#1A1A2E',
+    color: TEXT_PRIMARY,
   },
   intervalRow: {
     flexDirection: 'row',
@@ -119,34 +128,34 @@ const styles = StyleSheet.create({
   intervalButton: {
     borderRadius: 20,
     borderWidth: 2,
-    borderColor: '#DDE2FF',
+    borderColor: BORDER,
     paddingHorizontal: 14,
     paddingVertical: 8,
-    backgroundColor: '#F8F9FF',
+    backgroundColor: SURFACE_TINT,
   },
   intervalButtonSelected: {
-    backgroundColor: '#3B5BDB',
-    borderColor: '#3B5BDB',
+    backgroundColor: PRIMARY,
+    borderColor: PRIMARY,
   },
   intervalButtonText: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#555',
+    color: TEXT_SECONDARY,
   },
   intervalButtonTextSelected: {
-    color: '#FFFFFF',
+    color: WHITE,
   },
   // Mirrors AssignmentFormModal's label + errorText styles so this component
   // is visually consistent without needing the parent to pass styles down.
   label: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#555',
+    color: TEXT_SECONDARY,
     marginBottom: 6,
     marginTop: 12,
   },
   errorText: {
-    color: '#FF6B6B',
+    color: DANGER,
     fontSize: 12,
     marginTop: 4,
   },
