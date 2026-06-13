@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useState } from 'react';
-import { ActivityIndicator, Alert, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { cancelAllReminders, saveReminderMap } from '../lib/notifications';
@@ -36,14 +36,25 @@ export default function ProfileModal({ visible, onClose, email, userId }) {
   }
 
   function confirmDelete() {
-    Alert.alert(
-      'Delete account?',
-      'This permanently erases your account and every assignment you have saved. This cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive', onPress: handleDelete },
-      ],
-    );
+    const message =
+      'This permanently erases your account and every assignment you have saved. This cannot be undone.';
+    // React Native Web's Alert.alert renders no actionable buttons, so the
+    // destructive onPress would never fire — "Delete Account" would silently
+    // do nothing. Use window.confirm on web, mirroring the assignment delete
+    // flow in hooks/useAssignmentForm.js.
+    if (Platform.OS === 'web') {
+      // eslint-disable-next-line no-alert
+      if (window.confirm(`Delete account?\n\n${message}`)) handleDelete();
+    } else {
+      Alert.alert(
+        'Delete account?',
+        message,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Delete', style: 'destructive', onPress: handleDelete },
+        ],
+      );
+    }
   }
 
   async function handleDelete() {

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Alert } from 'react-native';
+import { Alert, Platform } from 'react-native';
 import { act } from 'react-test-renderer';
 import { render } from '../helpers/renderWithProviders';
 import { supabase } from '../../lib/supabase';
@@ -91,6 +91,54 @@ describe('ProfileModal', () => {
     expect(GoogleSignin.signOut).toHaveBeenCalledOnce();
     expect(supabase.auth.signOut).toHaveBeenCalledOnce();
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  // On web, Alert.alert renders no actionable buttons, so confirmDelete must
+  // fall back to window.confirm (matching hooks/useAssignmentForm.js). The
+  // test environment is `node`, so window is stubbed per-test.
+  it('web: accepting window.confirm wipes local data and signs out', async () => {
+    const originalOS = Platform.OS;
+    const prevWindow = globalThis.window;
+    const confirm = vi.fn(() => true);
+    Platform.OS = 'web';
+    globalThis.window = { confirm };
+    try {
+      const onClose = vi.fn();
+      const screen = render(React.createElement(ProfileModal, makeProps({ onClose })));
+      screen.firePressOnText('Delete Account');
+      await screen.flush();
+      expect(confirm).toHaveBeenCalledOnce();
+      expect(Alert.alert).not.toHaveBeenCalled();
+      expect(supabase.rpc).toHaveBeenCalledWith('delete_user');
+      expect(cancelAllReminders).toHaveBeenCalledOnce();
+      expect(onClose).toHaveBeenCalledOnce();
+    } finally {
+      Platform.OS = originalOS;
+      if (prevWindow === undefined) delete globalThis.window;
+      else globalThis.window = prevWindow;
+    }
+  });
+
+  it('web: dismissing window.confirm does not delete', async () => {
+    const originalOS = Platform.OS;
+    const prevWindow = globalThis.window;
+    const confirm = vi.fn(() => false);
+    Platform.OS = 'web';
+    globalThis.window = { confirm };
+    try {
+      const onClose = vi.fn();
+      const screen = render(React.createElement(ProfileModal, makeProps({ onClose })));
+      screen.firePressOnText('Delete Account');
+      await screen.flush();
+      expect(confirm).toHaveBeenCalledOnce();
+      expect(supabase.rpc).not.toHaveBeenCalled();
+      expect(cancelAllReminders).not.toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
+    } finally {
+      Platform.OS = originalOS;
+      if (prevWindow === undefined) delete globalThis.window;
+      else globalThis.window = prevWindow;
+    }
   });
 
   it('delete failure shows an error and does not wipe local data', async () => {
