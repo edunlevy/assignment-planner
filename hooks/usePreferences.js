@@ -86,6 +86,9 @@ export function usePreferences(userId, pendingRanking) {
     return () => { cancelled = true; };
   }, [userId]);
 
+  // Not yet called anywhere — there's no "edit my ranking" UI yet (a natural
+  // fit for screens/ProfileModal.js later). Exposed now so that follow-up
+  // doesn't require touching this hook's shape.
   const savePreferences = useCallback(async newRanking => {
     if (!userId || !isValidRanking(newRanking)) return;
     const saved = await dbUpsertPreferences(userId, newRanking);

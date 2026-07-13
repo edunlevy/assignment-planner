@@ -333,6 +333,22 @@ describe('pickWorkOnNext with a custom ranking', () => {
     expect(pickWorkOnNext([laterHighPriority, soonerLowPriority], TODAY, ranking).id).toBe('soon');
   });
 
+  test('a custom (non-default) ranking with dueDate above complexity uses RAW due date, not the buffered score', () => {
+    // Long due 2026-06-06: raw=5, buffer=2, adjusted=3.
+    // Short due 2026-06-05: raw=4, buffer=0, adjusted=4.
+    // Buffered comparison would pick "long" (3 < 4) even though it's due
+    // LATER — that's correct for DEFAULT_RANKING (matches legacy urgency
+    // behavior) but wrong for a ranking the user explicitly customized: with
+    // dueDate ranked above complexity, they expect due date alone to decide,
+    // with complexity as its own separate, later factor — not silently
+    // folded into the due-date comparison too. Raw due date correctly picks
+    // "short" (due sooner).
+    const long  = make({ id: 'long',  dueDate: '2026-06-06', complexity: 'long',  importance: 3 });
+    const short = make({ id: 'short', dueDate: '2026-06-05', complexity: 'short', importance: 3 });
+    const ranking = ['dueDate', 'complexity', 'importance']; // NOT equal to DEFAULT_RANKING
+    expect(pickWorkOnNext([long, short], TODAY, ranking).id).toBe('short');
+  });
+
   test('ranked factor ties fall through to the next ranked factor', () => {
     // Same due date and complexity — ties on both; importance (ranked last
     // here) still breaks the tie since it's the only differing field.

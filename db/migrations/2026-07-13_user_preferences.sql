@@ -29,12 +29,19 @@ create table if not exists public.user_preferences (
 -- Ranking must be a JSON array containing exactly the three known factor
 -- keys, each exactly once. Enforced with a function-based check constraint
 -- since jsonb has no native "is a permutation of" operator.
+--
+-- The explicit length check matters beyond documentation: jsonb_array_elements_text
+-- over an empty array produces zero rows, so array_agg over it returns NULL —
+-- and `NULL = array[...]` evaluates to NULL, which a CHECK constraint treats
+-- as satisfied (constraints only reject on an explicit FALSE). Without the
+-- length check, '[]'::jsonb would silently pass this constraint.
 create or replace function public.is_valid_ranking(r jsonb)
 returns boolean
 language sql
 immutable
 as $$
   select jsonb_typeof(r) = 'array'
+    and jsonb_array_length(r) = 3
     and (select array_agg(value order by value) from jsonb_array_elements_text(r))
       = array['complexity', 'dueDate', 'importance'];
 $$;
@@ -75,6 +82,11 @@ begin
     raise exception 'Not authenticated';
   end if;
 
+  -- user_preferences also has ON DELETE CASCADE on user_id (unlike
+  -- assignments, which relies on this explicit delete since RLS alone
+  -- can't reach it under SECURITY DEFINER) — kept explicit anyway so this
+  -- function stays a complete, readable list of every table account
+  -- deletion touches.
   delete from public.user_preferences where user_id = uid;
   delete from public.assignments where user_id = uid;
   delete from auth.users where id = uid;
