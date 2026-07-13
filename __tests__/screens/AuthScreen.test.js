@@ -134,6 +134,67 @@ describe('AuthScreen', () => {
     expect(screen.queryByText('Create Account')).toBeNull();
   });
 
+  it('shows the ranking picker with all three factors in the Sign Up tab', () => {
+    const screen = render(React.createElement(AuthScreen));
+    pressByText(screen, 'Sign Up');
+    expect(screen.getByText('Due date')).toBeTruthy();
+    expect(screen.getByText('Importance')).toBeTruthy();
+    expect(screen.getByText('Length / complexity')).toBeTruthy();
+  });
+
+  it('hides the ranking picker in Log In mode', () => {
+    const screen = render(React.createElement(AuthScreen));
+    expect(screen.queryByText('Due date')).toBeNull();
+  });
+
+  it('sign-up sends the default ranking order when the picker is untouched', async () => {
+    const screen = render(React.createElement(AuthScreen));
+    pressByText(screen, 'Sign Up');
+    fillInput(screen, 'you@example.com', 'new@test.com');
+    fillInput(screen, 'Min 8 characters', 'password123');
+    pressByText(screen, 'Create Account');
+    await screen.flush();
+    expect(supabase.auth.signUp).toHaveBeenCalledWith(expect.objectContaining({
+      options: expect.objectContaining({
+        data: { rankingPreference: ['dueDate', 'importance', 'complexity'] },
+      }),
+    }));
+  });
+
+  it('moving a ranking factor up changes the order sent on sign-up', async () => {
+    const screen = render(React.createElement(AuthScreen));
+    pressByText(screen, 'Sign Up');
+    fillInput(screen, 'you@example.com', 'new@test.com');
+    fillInput(screen, 'Min 8 characters', 'password123');
+    // Rows render in order [Due date, Importance, Length / complexity]; each
+    // has its own "Move up" button, so index 1 is Importance's.
+    pressByText(screen, 'Move up', 1);
+    pressByText(screen, 'Create Account');
+    await screen.flush();
+    expect(supabase.auth.signUp).toHaveBeenCalledWith(expect.objectContaining({
+      options: expect.objectContaining({
+        data: { rankingPreference: ['importance', 'dueDate', 'complexity'] },
+      }),
+    }));
+  });
+
+  it('switching from Sign Up back to Log In and back to Sign Up resets the ranking to default', async () => {
+    const screen = render(React.createElement(AuthScreen));
+    pressByText(screen, 'Sign Up');
+    pressByText(screen, 'Move up', 1); // Importance -> first
+    pressByText(screen, 'Log In', 0);
+    pressByText(screen, 'Sign Up');
+    fillInput(screen, 'you@example.com', 'reset@test.com');
+    fillInput(screen, 'Min 8 characters', 'password123');
+    pressByText(screen, 'Create Account');
+    await screen.flush();
+    expect(supabase.auth.signUp).toHaveBeenCalledWith(expect.objectContaining({
+      options: expect.objectContaining({
+        data: { rankingPreference: ['dueDate', 'importance', 'complexity'] },
+      }),
+    }));
+  });
+
   it('forgot password without an email shows an inline error', async () => {
     const screen = render(React.createElement(AuthScreen));
     pressByText(screen, 'Forgot password?');

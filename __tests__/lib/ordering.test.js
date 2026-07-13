@@ -1,6 +1,7 @@
 import {
   adjustedDaysUntilDue,
   COMPLEXITY_BUFFER,
+  DEFAULT_RANKING,
   pickWorkOnNext,
   sortForList,
 } from '../../lib/ordering';
@@ -155,12 +156,18 @@ describe('pickWorkOnNext', () => {
     expect(pickWorkOnNext([lowImp, highImp], TODAY).id).toBe('high');
   });
 
-  test('when adjusted days and importance are equal, picks earlier raw due date', () => {
+  test('when adjusted days and importance are equal, complexity (ranked third by default) breaks the tie before raw date', () => {
     // Long due in 4 days adj=2, importance 3; Short due in 2 days adj=2, importance 3
-    // → same adjusted AND importance, so raw date breaks tie: short is due sooner
+    // → adjusted AND importance tie. Before the ranking feature, pickWorkOnNext
+    // had no complexity tiebreaker at all and fell straight through to raw
+    // date (short, due sooner, used to win here). Now complexity is always
+    // one of the three ranked factors — even ranked last in DEFAULT_RANKING,
+    // it's still consulted before the raw-date fallback, so long (higher
+    // complexity rank) wins this tie instead. This is an intentional
+    // completeness improvement, not a regression.
     const longA  = make({ id: 'longA',  dueDate: '2026-06-05', complexity: 'long',  importance: 3 });
     const shortA = make({ id: 'shortA', dueDate: '2026-06-03', complexity: 'short', importance: 3 });
-    expect(pickWorkOnNext([longA, shortA], TODAY).id).toBe('shortA');
+    expect(pickWorkOnNext([longA, shortA], TODAY).id).toBe('longA');
   });
 
   test('overdue assignment always surfaces first', () => {
@@ -282,5 +289,80 @@ describe('sortForList', () => {
     const result = sortForList([shortItem, noComplexity, longItem]);
     // long(0) < medium(1) < short(2) → long, noComplexity, short
     expect(result.map(a => a.id)).toEqual(['lo', 'nc', 'sh']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pickWorkOnNext with a custom ranking
+// ---------------------------------------------------------------------------
+describe('pickWorkOnNext with a custom ranking', () => {
+  test('DEFAULT_RANKING is [dueDate, importance, complexity]', () => {
+    expect(DEFAULT_RANKING).toEqual(['dueDate', 'importance', 'complexity']);
+  });
+
+  test('explicit DEFAULT_RANKING reproduces the no-ranking-arg result', () => {
+    // Same fixture as the "long assignment due later surfaces before short
+    // assignment due sooner" test above — proves the ranked codepath is a
+    // no-op for callers that don't pass a ranking.
+    const longLater   = make({ id: 'long',  dueDate: '2026-06-06', complexity: 'long',  importance: 3 });
+    const shortSooner = make({ id: 'short', dueDate: '2026-06-05', complexity: 'short', importance: 3 });
+    const withoutArg = pickWorkOnNext([shortSooner, longLater], TODAY);
+    const withDefault = pickWorkOnNext([shortSooner, longLater], TODAY, DEFAULT_RANKING);
+    expect(withDefault.id).toBe(withoutArg.id);
+    expect(withDefault.id).toBe('long');
+  });
+
+  test('complexity ranked first: longer assignment wins even though it is due much later', () => {
+    const long  = make({ id: 'long',  dueDate: '2026-06-10', complexity: 'long'  }); // 9 days out
+    const short = make({ id: 'short', dueDate: '2026-06-02', complexity: 'short' }); // 1 day out
+    const ranking = ['complexity', 'dueDate', 'importance'];
+    expect(pickWorkOnNext([short, long], TODAY, ranking).id).toBe('long');
+  });
+
+  test('importance ranked first: higher importance wins even though it is due much later', () => {
+    const highImportance = make({ id: 'hi', dueDate: '2026-06-20', importance: 5 });
+    const lowImportance  = make({ id: 'lo', dueDate: '2026-06-02', importance: 1 });
+    const ranking = ['importance', 'dueDate', 'complexity'];
+    expect(pickWorkOnNext([lowImportance, highImportance], TODAY, ranking).id).toBe('hi');
+  });
+
+  test('due date ranked first: sooner due date wins even with lower importance/complexity', () => {
+    const soonerLowPriority = make({ id: 'soon', dueDate: '2026-06-02', importance: 1, complexity: 'short' });
+    const laterHighPriority = make({ id: 'later', dueDate: '2026-06-20', importance: 5, complexity: 'long' });
+    const ranking = ['dueDate', 'importance', 'complexity'];
+    expect(pickWorkOnNext([laterHighPriority, soonerLowPriority], TODAY, ranking).id).toBe('soon');
+  });
+
+  test('ranked factor ties fall through to the next ranked factor', () => {
+    // Same due date and complexity — ties on both; importance (ranked last
+    // here) still breaks the tie since it's the only differing field.
+    const date = '2026-06-05';
+    const highImp = make({ id: 'hi', dueDate: date, complexity: 'medium', importance: 5 });
+    const lowImp  = make({ id: 'lo', dueDate: date, complexity: 'medium', importance: 1 });
+    const ranking = ['dueDate', 'complexity', 'importance'];
+    expect(pickWorkOnNext([lowImp, highImp], TODAY, ranking).id).toBe('hi');
+  });
+
+  test('an invalid ranking (wrong length) falls back to DEFAULT_RANKING behavior', () => {
+    const longLater   = make({ id: 'long',  dueDate: '2026-06-06', complexity: 'long',  importance: 3 });
+    const shortSooner = make({ id: 'short', dueDate: '2026-06-05', complexity: 'short', importance: 3 });
+    expect(pickWorkOnNext([shortSooner, longLater], TODAY, ['dueDate']).id).toBe('long');
+  });
+
+  test('an invalid ranking (unknown key) falls back to DEFAULT_RANKING behavior', () => {
+    const longLater   = make({ id: 'long',  dueDate: '2026-06-06', complexity: 'long',  importance: 3 });
+    const shortSooner = make({ id: 'short', dueDate: '2026-06-05', complexity: 'short', importance: 3 });
+    const bogus = ['dueDate', 'importance', 'notARealFactor'];
+    expect(pickWorkOnNext([shortSooner, longLater], TODAY, bogus).id).toBe('long');
+  });
+
+  test('does not mutate the input array when a ranking is passed', () => {
+    const list = [
+      make({ id: 'a', dueDate: '2026-06-05' }),
+      make({ id: 'b', dueDate: '2026-06-03' }),
+    ];
+    const copy = [...list];
+    pickWorkOnNext(list, TODAY, ['complexity', 'importance', 'dueDate']);
+    expect(list).toEqual(copy);
   });
 });

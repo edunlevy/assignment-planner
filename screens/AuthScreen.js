@@ -12,14 +12,24 @@ import {
 } from 'react-native';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { DEFAULT_RANKING } from '../lib/ordering';
 import { signInWithApple, signInWithGoogle } from '../lib/socialAuth';
 import { supabase } from '../lib/supabase';
+
+// Display labels for the "Work on next" ranking factors, shown on the Sign
+// Up tab. Keys must match lib/ordering.js's RANKING_FACTORS.
+const FACTOR_LABELS = {
+  dueDate: 'Due date',
+  importance: 'Importance',
+  complexity: 'Length / complexity',
+};
 
 export default function AuthScreen() {
   const insets = useSafeAreaInsets();
   const [mode, setMode] = useState('login'); // 'login' | 'signup'
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [ranking, setRanking] = useState(DEFAULT_RANKING);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
@@ -40,7 +50,20 @@ export default function AuthScreen() {
     setMode(next);
     setEmail('');
     setPassword('');
+    setRanking(DEFAULT_RANKING);
     clearMessages();
+  }
+
+  // Swap the ranking entries at `index` and `index + direction` (direction
+  // is -1 for "move up" / +1 for "move down"). No-op at the array edges.
+  function moveRankingFactor(index, direction) {
+    setRanking(prev => {
+      const target = index + direction;
+      if (target < 0 || target >= prev.length) return prev;
+      const next = [...prev];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
   }
 
   async function handleForgotPassword() {
@@ -81,10 +104,15 @@ export default function AuthScreen() {
         // Email links must be https:// so they survive Mail/Gmail link rewriting.
         // The hosted page forwards into assignmentplanner:// for the installed app.
         const emailRedirectTo = 'https://ondeadline.app/confirm-email.html';
+        // rankingPreference rides in user_metadata so it survives the gap
+        // between signUp() and email confirmation (no session exists yet to
+        // write it straight to user_preferences). usePreferences reads it
+        // off session.user.user_metadata on first authenticated load and
+        // adopts it as the stored preference — see hooks/usePreferences.js.
         const { error: err } = await supabase.auth.signUp({
           email: email.trim(),
           password,
-          options: { emailRedirectTo },
+          options: { emailRedirectTo, data: { rankingPreference: ranking } },
         });
         if (err) {
           setError(err.message);
@@ -177,6 +205,40 @@ export default function AuthScreen() {
           onChangeText={t => { setPassword(t); clearMessages(); }}
           secureTextEntry
         />
+
+        {/* Priority ranking — signup mode only. Order of `ranking` (top =
+            index 0) is what gets sent as rankingPreference on submit. */}
+        {mode === 'signup' && (
+          <View style={styles.rankingSection}>
+            <Text style={styles.label}>
+              Rank what matters most for "Work on next"
+            </Text>
+            {ranking.map((factor, index) => (
+              <View key={factor} style={styles.rankingRow}>
+                <Text style={styles.rankingIndex}>{index + 1}</Text>
+                <Text style={styles.rankingText}>{FACTOR_LABELS[factor]}</Text>
+                <Pressable
+                  onPress={() => moveRankingFactor(index, -1)}
+                  disabled={index === 0}
+                  style={styles.rankingButton}
+                >
+                  <Text style={[styles.rankingButtonText, index === 0 && styles.rankingButtonDisabled]}>
+                    Move up
+                  </Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => moveRankingFactor(index, 1)}
+                  disabled={index === ranking.length - 1}
+                  style={styles.rankingButton}
+                >
+                  <Text style={[styles.rankingButtonText, index === ranking.length - 1 && styles.rankingButtonDisabled]}>
+                    Move down
+                  </Text>
+                </Pressable>
+              </View>
+            ))}
+          </View>
+        )}
 
         {/* Forgot password — login mode only */}
         {mode === 'login' && (
@@ -312,6 +374,44 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#1A1A2E',
     backgroundColor: '#F8F9FF',
+  },
+  rankingSection: {
+    marginTop: 4,
+  },
+  rankingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8F9FF',
+    borderWidth: 1,
+    borderColor: '#DDE2FF',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginTop: 6,
+  },
+  rankingIndex: {
+    width: 20,
+    fontWeight: '700',
+    color: '#3B5BDB',
+    fontSize: 14,
+  },
+  rankingText: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1A1A2E',
+  },
+  rankingButton: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  rankingButtonText: {
+    color: '#3B5BDB',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  rankingButtonDisabled: {
+    color: '#C3C9EE',
   },
   forgotButton: {
     alignSelf: 'flex-end',

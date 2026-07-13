@@ -146,10 +146,12 @@ jest.mock('./lib/supabase', () => {
       select: jest.fn(() => c),
       insert: jest.fn(() => c),
       update: jest.fn(() => c),
+      upsert: jest.fn(() => c),
       delete: jest.fn(() => c),
       eq: jest.fn(() => c),
       order: jest.fn(() => c),
       single: jest.fn(async () => ({ data: null, error: null })),
+      maybeSingle: jest.fn(async () => ({ data: null, error: null })),
       then: undefined,
     };
     return c;

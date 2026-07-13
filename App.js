@@ -18,6 +18,7 @@ import EmptyState from './components/EmptyState';
 import WorkOnNextCard from './components/WorkOnNextCard';
 import { pickWorkOnNext, sortForList } from './lib/ordering';
 import { useAssignments } from './hooks/useAssignments';
+import { usePreferences } from './hooks/usePreferences';
 import { parseAuthRedirect } from './lib/deepLink';
 import { buildWeeklySeries } from './lib/recurring';
 import { supabase } from './lib/supabase';
@@ -69,6 +70,12 @@ function AppScreen() {
     remove,
     removeSeries,
   } = useAssignments(userId);
+
+  // Ranking preference for "Work on next" (see hooks/usePreferences.js for
+  // the full reconciliation: existing DB row > sign-up metadata > default).
+  // rankingPreference in user_metadata only exists for users who signed up
+  // through the email/password form; social sign-ins fall back to default.
+  const { ranking } = usePreferences(userId, session?.user?.user_metadata?.rankingPreference);
 
   // Check for existing session and listen for auth changes.
   //
@@ -232,10 +239,10 @@ function AppScreen() {
     const incompleteCount = assignments.filter(a => a.status !== 'completed').length;
     return {
       sorted: sortForList(assignments),
-      workOnNext: pickWorkOnNext(assignments, now),
+      workOnNext: pickWorkOnNext(assignments, now, ranking),
       incompleteCount,
     };
-  }, [assignments, clockTick]);
+  }, [assignments, clockTick, ranking]);
 
   const editing = editingId ? assignments.find(a => a.id === editingId) ?? null : null;
 
@@ -306,7 +313,7 @@ function AppScreen() {
           renderItem={({ item }) => (
             <AssignmentRow item={item} onPress={() => openEditModal(item)} />
           )}
-          ListHeaderComponent={workOnNext ? <WorkOnNextCard assignment={workOnNext} /> : null}
+          ListHeaderComponent={workOnNext ? <WorkOnNextCard assignment={workOnNext} ranking={ranking} /> : null}
           contentContainerStyle={[styles.list, sorted.length === 0 && styles.listEmpty]}
           ListEmptyComponent={<EmptyState />}
         />

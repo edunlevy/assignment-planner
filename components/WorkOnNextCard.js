@@ -1,11 +1,22 @@
 import { Text, View } from 'react-native';
 import { complexityLabel, dueDateLabel } from '../lib/displayHelpers';
+import { DEFAULT_RANKING } from '../lib/ordering';
 import { WORK_CARD_BG, WORK_CARD_LABEL, WORK_CARD_TEXT, URGENT } from '../lib/constants';
+
+// Short phrase per ranking factor, used to build the subtitle below from
+// whichever factor the user ranked #1. Keys match lib/ordering.js's
+// RANKING_FACTORS.
+const FACTOR_PHRASES = {
+  dueDate: 'due date',
+  importance: 'importance',
+  complexity: 'length',
+};
 
 // Prominent card shown at the top of the list for the highest-priority
 // incomplete assignment (as selected by lib/ordering.pickWorkOnNext).
-export default function WorkOnNextCard({ assignment }) {
+export default function WorkOnNextCard({ assignment, ranking = DEFAULT_RANKING }) {
   const label = dueDateLabel(assignment.dueDate, new Date(), assignment.dueTime);
+  const topFactor = FACTOR_PHRASES[ranking[0]] ?? FACTOR_PHRASES.dueDate;
   return (
     <View className="mx-4 mb-3 rounded-2xl overflow-hidden" style={{ backgroundColor: WORK_CARD_BG }}>
       <View className="px-4 pt-4 pb-1">
@@ -13,7 +24,7 @@ export default function WorkOnNextCard({ assignment }) {
           Work on next
         </Text>
         <Text className="text-xs" style={{ color: 'rgba(147,197,253,0.7)' }}>
-          Prioritised by urgency &amp; complexity
+          Prioritised by your ranking &mdash; {topFactor} first
         </Text>
       </View>
       <View className="px-4 pb-4">
