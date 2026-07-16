@@ -18,7 +18,13 @@ import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { cancelAllReminders, saveReminderMap } from '../../lib/notifications';
 import ProfileModal from '../../screens/ProfileModal';
 
-const baseProps = { visible: true, email: 'user@test.com', userId: 'user-123' };
+const baseProps = {
+  visible: true,
+  email: 'user@test.com',
+  userId: 'user-123',
+  calendarSyncEnabled: false,
+  calendarSyncLoaded: true,
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -27,7 +33,13 @@ beforeEach(() => {
 });
 
 function makeProps(overrides = {}) {
-  return { ...baseProps, onClose: vi.fn(), ...overrides };
+  return {
+    ...baseProps,
+    onClose: vi.fn(),
+    onEnableCalendarSync: vi.fn(async () => true),
+    onDisableCalendarSync: vi.fn(async () => {}),
+    ...overrides,
+  };
 }
 
 describe('ProfileModal', () => {
@@ -158,5 +170,74 @@ describe('ProfileModal', () => {
     const screen = render(React.createElement(ProfileModal, makeProps({ onClose })));
     screen.firePressOnText('Close');
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  describe('calendar sync toggle', () => {
+    it('shows "Sync to Calendar" with an Off toggle when disabled', () => {
+      const screen = render(React.createElement(ProfileModal, makeProps({ calendarSyncEnabled: false })));
+      expect(screen.getByText('Sync to Calendar')).toBeTruthy();
+      expect(screen.getByText('Off')).toBeTruthy();
+    });
+
+    it('shows an On toggle when enabled', () => {
+      const screen = render(React.createElement(ProfileModal, makeProps({ calendarSyncEnabled: true })));
+      expect(screen.getByText('On')).toBeTruthy();
+    });
+
+    it('is hidden entirely on web (no native calendar API)', () => {
+      const originalOS = Platform.OS;
+      Platform.OS = 'web';
+      try {
+        const screen = render(React.createElement(ProfileModal, makeProps()));
+        expect(screen.queryByText('Sync to Calendar')).toBeNull();
+      } finally {
+        Platform.OS = originalOS;
+      }
+    });
+
+    it('tapping Off calls onEnableCalendarSync', async () => {
+      const onEnableCalendarSync = vi.fn(async () => true);
+      const screen = render(React.createElement(ProfileModal, makeProps({ calendarSyncEnabled: false, onEnableCalendarSync })));
+      screen.firePressOnText('Off');
+      await screen.flush();
+      expect(onEnableCalendarSync).toHaveBeenCalledOnce();
+    });
+
+    it('shows an error when calendar permission is denied', async () => {
+      const onEnableCalendarSync = vi.fn(async () => false);
+      const screen = render(React.createElement(ProfileModal, makeProps({ calendarSyncEnabled: false, onEnableCalendarSync })));
+      screen.firePressOnText('Off');
+      await screen.flush();
+      expect(screen.getByText(
+        'Calendar permission denied. Enable it for this app in your device Settings to sync assignments.'
+      )).toBeTruthy();
+    });
+
+    it('tapping On shows a three-way confirmation (Cancel / Keep Events / Delete Events)', () => {
+      const screen = render(React.createElement(ProfileModal, makeProps({ calendarSyncEnabled: true })));
+      screen.firePressOnText('On');
+      expect(Alert.alert).toHaveBeenCalledOnce();
+      const [title, , buttons] = Alert.alert.mock.calls[0];
+      expect(title).toBe('Turn off calendar sync?');
+      expect(buttons.map(b => b.text)).toEqual(['Cancel', 'Keep Events', 'Delete Events']);
+    });
+
+    it('choosing Keep Events calls onDisableCalendarSync(false)', async () => {
+      const onDisableCalendarSync = vi.fn(async () => {});
+      const screen = render(React.createElement(ProfileModal, makeProps({ calendarSyncEnabled: true, onDisableCalendarSync })));
+      screen.firePressOnText('On');
+      const [, , buttons] = Alert.alert.mock.calls[0];
+      await act(async () => { await buttons[1].onPress(); });
+      expect(onDisableCalendarSync).toHaveBeenCalledWith(false);
+    });
+
+    it('choosing Delete Events calls onDisableCalendarSync(true)', async () => {
+      const onDisableCalendarSync = vi.fn(async () => {});
+      const screen = render(React.createElement(ProfileModal, makeProps({ calendarSyncEnabled: true, onDisableCalendarSync })));
+      screen.firePressOnText('On');
+      const [, , buttons] = Alert.alert.mock.calls[0];
+      await act(async () => { await buttons[2].onPress(); });
+      expect(onDisableCalendarSync).toHaveBeenCalledWith(true);
+    });
   });
 });

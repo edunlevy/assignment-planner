@@ -68,6 +68,10 @@ function AppScreen() {
     update,
     remove,
     removeSeries,
+    calendarSyncEnabled,
+    calendarSyncLoaded,
+    enableCalendarSync,
+    disableCalendarSync,
   } = useAssignments(userId);
 
   // Check for existing session and listen for auth changes.
@@ -338,6 +342,10 @@ function AppScreen() {
         onClose={() => setProfileVisible(false)}
         email={session?.user?.email ?? ''}
         userId={session?.user?.id}
+        calendarSyncEnabled={calendarSyncEnabled}
+        calendarSyncLoaded={calendarSyncLoaded}
+        onEnableCalendarSync={enableCalendarSync}
+        onDisableCalendarSync={disableCalendarSync}
       />
 
       <ResetPasswordModal

@@ -6,11 +6,22 @@ import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { cancelAllReminders, saveReminderMap } from '../lib/notifications';
 import { supabase } from '../lib/supabase';
 
-export default function ProfileModal({ visible, onClose, email, userId }) {
+export default function ProfileModal({
+  visible,
+  onClose,
+  email,
+  userId,
+  calendarSyncEnabled,
+  calendarSyncLoaded,
+  onEnableCalendarSync,
+  onDisableCalendarSync,
+}) {
   const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState('');
+  const [calendarBusy, setCalendarBusy] = useState(false);
+  const [calendarError, setCalendarError] = useState('');
 
   async function handleSignOut() {
     setLoading(true);
@@ -87,6 +98,58 @@ export default function ProfileModal({ visible, onClose, email, userId }) {
     }
   }
 
+  async function handleEnableCalendarSync() {
+    setCalendarError('');
+    setCalendarBusy(true);
+    try {
+      const granted = await onEnableCalendarSync();
+      if (!granted) {
+        setCalendarError('Calendar permission denied. Enable it for this app in your device Settings to sync assignments.');
+      }
+    } catch {
+      setCalendarError('Could not turn on calendar sync. Please try again.');
+    } finally {
+      setCalendarBusy(false);
+    }
+  }
+
+  async function handleDisableCalendarSync(deleteEvents) {
+    setCalendarError('');
+    setCalendarBusy(true);
+    try {
+      await onDisableCalendarSync(deleteEvents);
+    } catch {
+      setCalendarError('Could not turn off calendar sync. Please try again.');
+    } finally {
+      setCalendarBusy(false);
+    }
+  }
+
+  // Turning sync off has three outcomes (cancel / keep events / delete
+  // events) via a three-button Alert.alert. No web fallback needed here,
+  // unlike confirmDelete above — the whole calendar-sync section below is
+  // already hidden on web (no native calendar API to sync with), so this
+  // is never reached with Platform.OS === 'web'.
+  function confirmDisableCalendarSync() {
+    Alert.alert(
+      'Turn off calendar sync?',
+      'You can keep the events this app already created on your calendar, or remove them.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Keep Events', onPress: () => handleDisableCalendarSync(false) },
+        { text: 'Delete Events', style: 'destructive', onPress: () => handleDisableCalendarSync(true) },
+      ],
+    );
+  }
+
+  function handleCalendarSyncToggle() {
+    if (calendarSyncEnabled) {
+      confirmDisableCalendarSync();
+    } else {
+      handleEnableCalendarSync();
+    }
+  }
+
   return (
     <Modal
       visible={visible}
@@ -104,6 +167,31 @@ export default function ProfileModal({ visible, onClose, email, userId }) {
             <Text style={styles.emailLabel}>Signed in as</Text>
             <Text style={styles.emailValue} numberOfLines={1}>{email}</Text>
           </View>
+
+          {/* Calendar sync — native only; no device calendar API on web. */}
+          {Platform.OS !== 'web' && (
+            <View style={styles.calendarRow}>
+              <View style={styles.calendarTextGroup}>
+                <Text style={styles.calendarLabel}>Sync to Calendar</Text>
+                <Text style={styles.calendarSub}>
+                  Adds a dedicated "Assignment Planner" calendar with your due dates
+                </Text>
+              </View>
+              <Pressable
+                style={[styles.calendarToggle, calendarSyncEnabled && styles.calendarToggleOn]}
+                onPress={handleCalendarSyncToggle}
+                disabled={!calendarSyncLoaded || calendarBusy}
+              >
+                {calendarBusy
+                  ? <ActivityIndicator size="small" color={calendarSyncEnabled ? '#FFFFFF' : '#3B5BDB'} />
+                  : <Text style={[styles.calendarToggleText, calendarSyncEnabled && styles.calendarToggleTextOn]}>
+                      {calendarSyncEnabled ? 'On' : 'Off'}
+                    </Text>
+                }
+              </Pressable>
+            </View>
+          )}
+          {calendarError ? <Text style={styles.error}>{calendarError}</Text> : null}
 
           <Pressable
             style={[styles.signOutButton, (loading || deleting) && styles.signOutButtonDisabled]}
@@ -176,6 +264,50 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: '#1A1A2E',
+  },
+  calendarRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#F0F4FF',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 10,
+  },
+  calendarTextGroup: {
+    flex: 1,
+    marginRight: 12,
+  },
+  calendarLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#1A1A2E',
+  },
+  calendarSub: {
+    fontSize: 12,
+    color: '#888',
+    marginTop: 2,
+  },
+  calendarToggle: {
+    minWidth: 56,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#3B5BDB',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  calendarToggleOn: {
+    backgroundColor: '#3B5BDB',
+  },
+  calendarToggleText: {
+    color: '#3B5BDB',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  calendarToggleTextOn: {
+    color: '#FFFFFF',
   },
   signOutButton: {
     backgroundColor: '#FEF2F2',

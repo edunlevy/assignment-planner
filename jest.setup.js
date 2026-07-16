@@ -101,6 +101,23 @@ jest.mock('expo-notifications', () => ({
   },
 }));
 
+// expo-calendar: every export used by lib/calendarSync becomes a jest.fn so
+// tests can spy/return-value per case without hitting the native module.
+jest.mock('expo-calendar', () => ({
+  getCalendarPermissionsAsync: jest.fn(async () => ({ status: 'granted' })),
+  requestCalendarPermissionsAsync: jest.fn(async () => ({ status: 'granted' })),
+  getCalendarsAsync: jest.fn(async () => []),
+  createCalendarAsync: jest.fn(async () => 'calendar-id'),
+  deleteCalendarAsync: jest.fn(async () => undefined),
+  getDefaultCalendarSourceAsync: jest.fn(async () => ({ id: 'source-id', name: 'Default' })),
+  createEventAsync: jest.fn(async () => 'event-id'),
+  updateEventAsync: jest.fn(async () => undefined),
+  deleteEventAsync: jest.fn(async () => undefined),
+  EntityTypes: { EVENT: 'event' },
+  SourceType: { LOCAL: 'local' },
+  CalendarAccessLevel: { OWNER: 'owner' },
+}));
+
 // @react-native-community/datetimepicker: native module used by DueDateField
 // and DueTimeField. Stub as a passthrough so components that import those
 // fields don't crash in the node test environment.
