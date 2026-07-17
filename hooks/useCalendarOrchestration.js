@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   createEventFor,
   deleteAssignmentCalendar,
@@ -75,6 +75,18 @@ export function useCalendarOrchestration(userId) {
   const [syncEnabled, setSyncEnabled] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
+  // Latest syncEnabled, read by scheduleFor/scheduleBatchFor/reconcileOnLoad
+  // below WITHOUT being one of their useCallback dependencies. syncEnabled
+  // flips asynchronously shortly after mount (once the AsyncStorage read in
+  // the effect below resolves) — if these callbacks depended on it directly,
+  // each one's identity (and the memoized return object below) would change
+  // right after that first settle, and any consumer whose OWN effect depends
+  // on the whole returned object (useAssignments' load effect depends on
+  // `calendar`) would silently re-run a second time on every mount. Mirrors
+  // the assignmentsRef pattern in hooks/useAssignments.js.
+  const syncEnabledRef = useRef(syncEnabled);
+  useEffect(() => { syncEnabledRef.current = syncEnabled; }, [syncEnabled]);
+
   useEffect(() => {
     if (!userId) {
       setSyncEnabled(false);
@@ -102,7 +114,7 @@ export function useCalendarOrchestration(userId) {
   // list, so a completed event just stays in place until the assignment
   // itself is deleted (see cancelFor, called from useAssignments' remove).
   const scheduleFor = useCallback(async assignment => {
-    if (!userId || !syncEnabled) return;
+    if (!userId || !syncEnabledRef.current) return;
     const map = await loadEventMap(userId);
     const existingId = map[assignment.id];
 
@@ -121,13 +133,13 @@ export function useCalendarOrchestration(userId) {
       delete map[assignment.id];
     }
     await saveEventMap(userId, map);
-  }, [userId, syncEnabled]);
+  }, [userId]);
 
   // Create events for many NEW assignments at once (e.g. a recurring
   // series), sharing ONE ensureAssignmentCalendar() lookup instead of one
   // per item — mirrors reminders' scheduleBatchFor for the same reason.
   const scheduleBatchFor = useCallback(async assignments => {
-    if (!userId || !syncEnabled || assignments.length === 0) return;
+    if (!userId || !syncEnabledRef.current || assignments.length === 0) return;
     const map = await loadEventMap(userId);
     const calendarId = await ensureAssignmentCalendar();
     for (const a of assignments) {
@@ -136,7 +148,7 @@ export function useCalendarOrchestration(userId) {
       if (newId) map[a.id] = newId;
     }
     await saveEventMap(userId, map);
-  }, [userId, syncEnabled]);
+  }, [userId]);
 
   // Delete one assignment's event and prune its map entry. Not gated on
   // syncEnabled — if an event exists (sync was on when it was created,
@@ -155,9 +167,9 @@ export function useCalendarOrchestration(userId) {
   // Backfill any assignment missing an event. Called after every fetch
   // (covers assignments created on another device while sync was off here).
   const reconcileOnLoad = useCallback(async assignments => {
-    if (!userId || !syncEnabled) return;
+    if (!userId || !syncEnabledRef.current) return;
     await backfillMissingEvents(userId, assignments);
-  }, [userId, syncEnabled]);
+  }, [userId]);
 
   // Turn sync on: request permission, ensure the calendar exists, backfill
   // every current assignment, THEN flip the enabled flag. Returns false
