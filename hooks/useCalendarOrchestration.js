@@ -50,6 +50,26 @@ async function saveEventMap(userId, map) {
   }
 }
 
+// AsyncStorage has no atomic read-modify-write primitive, and several call
+// sites below can legitimately run concurrently for the SAME userId — a
+// mutation's scheduleFor, a realtime echo's scheduleFor, and a load-time
+// backfill can all overlap. Without serializing them, a classic lost-update
+// race can drop one call's map entry: it reads the map before another call's
+// write lands, then overwrites that write with its own stale copy, orphaning
+// the dropped call's event (never deleted) and producing a duplicate on the
+// next backfill (which sees the id as "missing" again). Keyed by userId, not
+// per-assignment-id like useAssignments' enqueueForId — the underlying
+// AsyncStorage key is per-user, not per-assignment, so that's the correct
+// serialization granularity here.
+const eventMapLocks = new Map();
+function withEventMapLock(userId, fn) {
+  const prev = eventMapLocks.get(userId) ?? Promise.resolve();
+  const settled = prev.then(fn, fn);
+  const cleanup = settled.catch(() => {});
+  eventMapLocks.set(userId, cleanup);
+  return settled;
+}
+
 // Create an event for every assignment missing one. Deliberately a plain
 // function (not a hook callback) so it never depends on component state —
 // called both from reconcileOnLoad (gated on syncEnabled) and directly from
@@ -58,17 +78,33 @@ async function saveEventMap(userId, map) {
 // a syncEnabled-gated callback invoked synchronously inside enableSync
 // would see the STALE pre-toggle value and no-op).
 async function backfillMissingEvents(userId, assignments) {
-  const map = await loadEventMap(userId);
-  const missing = assignments.filter(a => !map[a.id]);
-  if (missing.length === 0) return;
+  return withEventMapLock(userId, async () => {
+    const map = await loadEventMap(userId);
+    const missing = assignments.filter(a => !map[a.id]);
+    if (missing.length === 0) return;
 
-  const calendarId = await ensureAssignmentCalendar();
-  for (const a of missing) {
-    // eslint-disable-next-line no-await-in-loop
-    const newId = await createEventFor(a, calendarId);
-    if (newId) map[a.id] = newId;
-  }
-  await saveEventMap(userId, map);
+    const calendarId = await ensureAssignmentCalendar();
+    for (const a of missing) {
+      // eslint-disable-next-line no-await-in-loop
+      const newId = await createEventFor(a, calendarId);
+      if (newId) map[a.id] = newId;
+    }
+
+    // Re-check the authoritative on-disk flag (not the in-memory
+    // syncEnabledRef, which only lives in the calling hook instance) right
+    // before writing. Covers the disableSync race: if sync was turned off
+    // while this backfill sat queued behind the lock — including the case
+    // where disableSync's own map-clear already ran and is about to run
+    // again on its next turn — discard this batch rather than resurrecting
+    // events for a sync session that's already being torn down. When
+    // backfill instead wins the race and runs first, this reads 'true' and
+    // proceeds normally; disableSync's clear (queued behind this same lock)
+    // still runs afterward and ends up as the final, correct state either way.
+    const stillEnabled = (await AsyncStorage.getItem(enabledKey(userId))) === 'true';
+    if (!stillEnabled) return;
+
+    await saveEventMap(userId, map);
+  });
 }
 
 export function useCalendarOrchestration(userId) {
@@ -115,24 +151,35 @@ export function useCalendarOrchestration(userId) {
   // itself is deleted (see cancelFor, called from useAssignments' remove).
   const scheduleFor = useCallback(async assignment => {
     if (!userId || !syncEnabledRef.current) return;
-    const map = await loadEventMap(userId);
-    const existingId = map[assignment.id];
+    return withEventMapLock(userId, async () => {
+      // Re-check after acquiring the lock: sync may have been turned off
+      // while this call sat queued behind another in-flight write.
+      if (!syncEnabledRef.current) return;
+      const map = await loadEventMap(userId);
+      const existingId = map[assignment.id];
 
-    if (existingId) {
-      const updated = await updateEventFor(existingId, assignment);
-      if (updated) return;
-      // Event is gone (e.g. user deleted it manually in their calendar
-      // app) — fall through and recreate rather than leaving it unsynced.
-    }
+      if (existingId) {
+        const updated = await updateEventFor(existingId, assignment);
+        if (updated) return;
+        // updateEventFor returning false covers both "event genuinely
+        // deleted" (the common real-world case — expo-calendar's error
+        // doesn't reliably distinguish "not found" from other failures) and
+        // rarer transient errors. Recreating on every failure risks an
+        // occasional duplicate on a transient error, but leaving a
+        // genuinely-deleted event permanently unsynced is the worse
+        // failure mode for what's meant to be a self-healing mirror —
+        // accepted tradeoff, not fixed further here.
+      }
 
-    const calendarId = await ensureAssignmentCalendar();
-    const newId = await createEventFor(assignment, calendarId);
-    if (newId) {
-      map[assignment.id] = newId;
-    } else {
-      delete map[assignment.id];
-    }
-    await saveEventMap(userId, map);
+      const calendarId = await ensureAssignmentCalendar();
+      const newId = await createEventFor(assignment, calendarId);
+      if (newId) {
+        map[assignment.id] = newId;
+      } else {
+        delete map[assignment.id];
+      }
+      await saveEventMap(userId, map);
+    });
   }, [userId]);
 
   // Create events for many NEW assignments at once (e.g. a recurring
@@ -140,14 +187,17 @@ export function useCalendarOrchestration(userId) {
   // per item — mirrors reminders' scheduleBatchFor for the same reason.
   const scheduleBatchFor = useCallback(async assignments => {
     if (!userId || !syncEnabledRef.current || assignments.length === 0) return;
-    const map = await loadEventMap(userId);
-    const calendarId = await ensureAssignmentCalendar();
-    for (const a of assignments) {
-      // eslint-disable-next-line no-await-in-loop
-      const newId = await createEventFor(a, calendarId);
-      if (newId) map[a.id] = newId;
-    }
-    await saveEventMap(userId, map);
+    return withEventMapLock(userId, async () => {
+      if (!syncEnabledRef.current) return;
+      const map = await loadEventMap(userId);
+      const calendarId = await ensureAssignmentCalendar();
+      for (const a of assignments) {
+        // eslint-disable-next-line no-await-in-loop
+        const newId = await createEventFor(a, calendarId);
+        if (newId) map[a.id] = newId;
+      }
+      await saveEventMap(userId, map);
+    });
   }, [userId]);
 
   // Delete one assignment's event and prune its map entry. Not gated on
@@ -156,12 +206,14 @@ export function useCalendarOrchestration(userId) {
   // linger forever after the assignment itself is gone.
   const cancelFor = useCallback(async id => {
     if (!userId) return;
-    const map = await loadEventMap(userId);
-    const eventId = map[id];
-    if (!eventId) return;
-    await deleteEventFor(eventId);
-    delete map[id];
-    await saveEventMap(userId, map);
+    return withEventMapLock(userId, async () => {
+      const map = await loadEventMap(userId);
+      const eventId = map[id];
+      if (!eventId) return;
+      await deleteEventFor(eventId);
+      delete map[id];
+      await saveEventMap(userId, map);
+    });
   }, [userId]);
 
   // Backfill any assignment missing an event. Called after every fetch
@@ -192,12 +244,22 @@ export function useCalendarOrchestration(userId) {
   const disableSync = useCallback(async deleteEvents => {
     if (!userId) return;
     setSyncEnabled(false);
+    // Flip the on-disk flag first, immediately (not queued behind the
+    // lock) — it's the authoritative signal backfillMissingEvents re-reads
+    // right before its own write. Whichever of the two runs first through
+    // the lock below, the flag is already 'false' by the time either one
+    // checks it: a backfill still mid-flight discards its results instead
+    // of resurrecting events for a sync session that's being torn down,
+    // and this function's own clear always runs (now or once its lock
+    // turn arrives), so the map ends up empty either way.
     await AsyncStorage.setItem(enabledKey(userId), 'false');
-    if (deleteEvents) {
-      const calendarId = await ensureAssignmentCalendar();
-      await deleteAssignmentCalendar(calendarId);
-    }
-    await saveEventMap(userId, {});
+    return withEventMapLock(userId, async () => {
+      if (deleteEvents) {
+        const calendarId = await ensureAssignmentCalendar();
+        await deleteAssignmentCalendar(calendarId);
+      }
+      await saveEventMap(userId, {});
+    });
   }, [userId]);
 
   // Memoized so consumers (useAssignments) can depend on the whole `calendar`
