@@ -70,6 +70,15 @@ function withEventMapLock(userId, fn) {
   return settled;
 }
 
+// The authoritative "is sync on" signal for anything running inside
+// withEventMapLock. NOT the same as the hook's in-memory syncEnabledRef,
+// which only reflects this hook instance's own React state and can be
+// stale relative to a disableSync call whose flag write already landed but
+// whose own lock turn (the calendar delete / map clear) hasn't run yet.
+async function isSyncEnabledOnDisk(userId) {
+  return (await AsyncStorage.getItem(enabledKey(userId))) === 'true';
+}
+
 // Create an event for every assignment missing one. Deliberately a plain
 // function (not a hook callback) so it never depends on component state —
 // called both from reconcileOnLoad (gated on syncEnabled) and directly from
@@ -79,6 +88,17 @@ function withEventMapLock(userId, fn) {
 // would see the STALE pre-toggle value and no-op).
 async function backfillMissingEvents(userId, assignments) {
   return withEventMapLock(userId, async () => {
+    // Check BEFORE touching the calendar at all — not just before the
+    // final map write. Covers the disableSync race: if sync was turned off
+    // while this backfill sat queued behind the lock, bail here so a
+    // deleted calendar never gets silently recreated and repopulated with
+    // events nothing would ever track or clean up. An earlier version of
+    // this fix checked only right before the map write, which skipped
+    // recording the new events but let the native creates (and any
+    // calendar recreation) happen anyway — orphaning them instead of
+    // preventing them.
+    if (!(await isSyncEnabledOnDisk(userId))) return;
+
     const map = await loadEventMap(userId);
     const missing = assignments.filter(a => !map[a.id]);
     if (missing.length === 0) return;
@@ -89,20 +109,6 @@ async function backfillMissingEvents(userId, assignments) {
       const newId = await createEventFor(a, calendarId);
       if (newId) map[a.id] = newId;
     }
-
-    // Re-check the authoritative on-disk flag (not the in-memory
-    // syncEnabledRef, which only lives in the calling hook instance) right
-    // before writing. Covers the disableSync race: if sync was turned off
-    // while this backfill sat queued behind the lock — including the case
-    // where disableSync's own map-clear already ran and is about to run
-    // again on its next turn — discard this batch rather than resurrecting
-    // events for a sync session that's already being torn down. When
-    // backfill instead wins the race and runs first, this reads 'true' and
-    // proceeds normally; disableSync's clear (queued behind this same lock)
-    // still runs afterward and ends up as the final, correct state either way.
-    const stillEnabled = (await AsyncStorage.getItem(enabledKey(userId))) === 'true';
-    if (!stillEnabled) return;
-
     await saveEventMap(userId, map);
   });
 }
@@ -152,9 +158,13 @@ export function useCalendarOrchestration(userId) {
   const scheduleFor = useCallback(async assignment => {
     if (!userId || !syncEnabledRef.current) return;
     return withEventMapLock(userId, async () => {
-      // Re-check after acquiring the lock: sync may have been turned off
-      // while this call sat queued behind another in-flight write.
-      if (!syncEnabledRef.current) return;
+      // Authoritative (on-disk) re-check after acquiring the lock, not the
+      // in-memory ref — sync may have been turned off, including a
+      // disableSync whose flag write already landed but whose own lock
+      // turn (calendar delete / map clear) hasn't run yet, while this call
+      // sat queued. See backfillMissingEvents for why this must happen
+      // before any calendar mutation, not just before the map write.
+      if (!(await isSyncEnabledOnDisk(userId))) return;
       const map = await loadEventMap(userId);
       const existingId = map[assignment.id];
 
@@ -188,7 +198,7 @@ export function useCalendarOrchestration(userId) {
   const scheduleBatchFor = useCallback(async assignments => {
     if (!userId || !syncEnabledRef.current || assignments.length === 0) return;
     return withEventMapLock(userId, async () => {
-      if (!syncEnabledRef.current) return;
+      if (!(await isSyncEnabledOnDisk(userId))) return;
       const map = await loadEventMap(userId);
       const calendarId = await ensureAssignmentCalendar();
       for (const a of assignments) {
@@ -245,13 +255,18 @@ export function useCalendarOrchestration(userId) {
     if (!userId) return;
     setSyncEnabled(false);
     // Flip the on-disk flag first, immediately (not queued behind the
-    // lock) — it's the authoritative signal backfillMissingEvents re-reads
-    // right before its own write. Whichever of the two runs first through
-    // the lock below, the flag is already 'false' by the time either one
-    // checks it: a backfill still mid-flight discards its results instead
-    // of resurrecting events for a sync session that's being torn down,
-    // and this function's own clear always runs (now or once its lock
-    // turn arrives), so the map ends up empty either way.
+    // lock) — it's the authoritative signal isSyncEnabledOnDisk reads for
+    // every other locked operation. A backfill or scheduleFor that hasn't
+    // yet reached its own check sees 'false' the moment it does and bails
+    // before touching the calendar; one already past its check and mid-way
+    // through native calls when this write lands isn't retroactively
+    // stopped, but see backfillMissingEvents/scheduleFor's comments for why
+    // that narrow window doesn't actually leak (deleteEvents=true deletes
+    // the whole calendar regardless of exactly what was in it moments
+    // before, and deleteEvents=false's "extra kept event" isn't a
+    // correctness problem given the user chose to keep events anyway).
+    // This function's own clear always runs (now or once its lock turn
+    // arrives), so the map ends up empty either way.
     await AsyncStorage.setItem(enabledKey(userId), 'false');
     return withEventMapLock(userId, async () => {
       if (deleteEvents) {

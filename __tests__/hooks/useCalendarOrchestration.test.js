@@ -247,24 +247,39 @@ describe('event map concurrency', () => {
     expect(map).toEqual({ a1: 'event-a1', a2: 'event-a2', a3: 'event-a3' });
   });
 
-  test('a backfill discards its results if sync was disabled while it was mid-flight', async () => {
-    // Regression test for the disableSync race: the on-disk enabled flag
-    // is re-checked immediately before the backfill's write, so a backfill
-    // that was already committed to running before the user turned sync
-    // off doesn't resurrect events into a torn-down sync session.
+  test('a backfill never touches the calendar if the on-disk flag is already off when it runs, even with a stale in-memory ref', async () => {
+    // Regression test for the disableSync race, fixed version: the
+    // authoritative on-disk flag is checked BEFORE any calendar mutation
+    // (not just before the final map write — an earlier, incomplete fix
+    // checked only there, which let a deleted calendar get silently
+    // recreated and repopulated with untracked, orphaned events before the
+    // write was skipped). Simulates disableSync's flag write landing
+    // without going through disableSync itself, so the in-memory ref still
+    // thinks sync is on (passing reconcileOnLoad's outer guard) while the
+    // disk — the authoritative source the inner check reads — says off.
     await AsyncStorage.setItem(`calendar_sync_enabled_${USER_ID}`, 'true');
-    // Flip the flag mid-backfill, from inside a mocked call the backfill
-    // itself awaits — simulates disableSync's flag write landing while
-    // this backfill is queued/running.
-    createEventFor.mockImplementation(async () => {
-      await AsyncStorage.setItem(`calendar_sync_enabled_${USER_ID}`, 'false');
-      return 'event-new';
-    });
     const { result } = renderHook(() => useCalendarOrchestration(USER_ID));
     await flushMicrotasks();
+    await AsyncStorage.setItem(`calendar_sync_enabled_${USER_ID}`, 'false');
 
     await act(async () => { await result.current.reconcileOnLoad([makeAssignment('a1')]); });
 
+    expect(ensureAssignmentCalendar).not.toHaveBeenCalled();
+    expect(createEventFor).not.toHaveBeenCalled();
+    const stored = await AsyncStorage.getItem(`calendar_events_${USER_ID}`);
+    expect(stored === null ? {} : JSON.parse(stored)).toEqual({});
+  });
+
+  test('scheduleFor never touches the calendar under the same stale-ref/authoritative-disk mismatch', async () => {
+    await AsyncStorage.setItem(`calendar_sync_enabled_${USER_ID}`, 'true');
+    const { result } = renderHook(() => useCalendarOrchestration(USER_ID));
+    await flushMicrotasks();
+    await AsyncStorage.setItem(`calendar_sync_enabled_${USER_ID}`, 'false');
+
+    await act(async () => { await result.current.scheduleFor(makeAssignment('a1')); });
+
+    expect(ensureAssignmentCalendar).not.toHaveBeenCalled();
+    expect(createEventFor).not.toHaveBeenCalled();
     const stored = await AsyncStorage.getItem(`calendar_events_${USER_ID}`);
     expect(stored === null ? {} : JSON.parse(stored)).toEqual({});
   });
