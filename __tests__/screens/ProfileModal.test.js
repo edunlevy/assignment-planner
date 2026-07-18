@@ -18,7 +18,13 @@ import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { cancelAllReminders, saveReminderMap } from '../../lib/notifications';
 import ProfileModal from '../../screens/ProfileModal';
 
-const baseProps = { visible: true, email: 'user@test.com', userId: 'user-123' };
+const baseProps = {
+  visible: true,
+  email: 'user@test.com',
+  userId: 'user-123',
+  calendarSyncEnabled: false,
+  calendarSyncLoaded: true,
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -27,7 +33,13 @@ beforeEach(() => {
 });
 
 function makeProps(overrides = {}) {
-  return { ...baseProps, onClose: vi.fn(), ...overrides };
+  return {
+    ...baseProps,
+    onClose: vi.fn(),
+    onEnableCalendarSync: vi.fn(async () => true),
+    onDisableCalendarSync: vi.fn(async () => {}),
+    ...overrides,
+  };
 }
 
 describe('ProfileModal', () => {
@@ -80,7 +92,8 @@ describe('ProfileModal', () => {
 
   it('confirming delete wipes local data and signs out', async () => {
     const onClose = vi.fn();
-    const screen = render(React.createElement(ProfileModal, makeProps({ onClose })));
+    const onDisableCalendarSync = vi.fn(async () => {});
+    const screen = render(React.createElement(ProfileModal, makeProps({ onClose, onDisableCalendarSync })));
     screen.firePressOnText('Delete Account');
     const [, , buttons] = Alert.alert.mock.calls[0];
     await act(async () => { await buttons[1].onPress(); });
@@ -91,6 +104,69 @@ describe('ProfileModal', () => {
     expect(GoogleSignin.signOut).toHaveBeenCalledOnce();
     expect(supabase.auth.signOut).toHaveBeenCalledOnce();
     expect(onClose).toHaveBeenCalledOnce();
+    // calendarSyncEnabled defaults to false in these props — no reason to
+    // touch calendar sync for an account that never turned it on.
+    expect(onDisableCalendarSync).not.toHaveBeenCalled();
+  });
+
+  it('confirming delete also deletes synced calendar events when calendar sync was on', async () => {
+    const onDisableCalendarSync = vi.fn(async () => {});
+    const screen = render(React.createElement(ProfileModal, makeProps({
+      calendarSyncEnabled: true,
+      onDisableCalendarSync,
+    })));
+    screen.firePressOnText('Delete Account');
+    const [, , buttons] = Alert.alert.mock.calls[0];
+    await act(async () => { await buttons[1].onPress(); });
+    expect(supabase.rpc).toHaveBeenCalledWith('delete_user');
+    // true: the account and every assignment are gone, so the synced
+    // calendar events must go too, not just be left behind detached.
+    expect(onDisableCalendarSync).toHaveBeenCalledWith(true);
+  });
+
+  it('a calendar-sync cleanup failure during delete does not block the rest of local cleanup', async () => {
+    const onClose = vi.fn();
+    const onDisableCalendarSync = vi.fn(async () => { throw new Error('calendar API down'); });
+    const screen = render(React.createElement(ProfileModal, makeProps({
+      onClose,
+      calendarSyncEnabled: true,
+      onDisableCalendarSync,
+    })));
+    screen.firePressOnText('Delete Account');
+    const [, , buttons] = Alert.alert.mock.calls[0];
+    await act(async () => { await buttons[1].onPress(); });
+    // Account deletion already succeeded server-side by this point — a
+    // best-effort calendar failure must not strand the user mid-flow.
+    expect(saveReminderMap).toHaveBeenCalledWith('user-123', {});
+    expect(supabase.auth.signOut).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('Delete Account is disabled while a calendar-sync toggle is in flight, closing a race with account deletion', async () => {
+    // Regression test: calendarSyncEnabled is a snapshot passed down as a
+    // prop. Without this guard, tapping Delete Account while an enable-sync
+    // toggle is still in flight would read the pre-toggle (stale) false
+    // value, skip the calendar cleanup in handleDelete, and could leave
+    // events the in-flight toggle creates moments later permanently
+    // orphaned (the account — and any record of them — is already gone).
+    let resolveEnable;
+    const onEnableCalendarSync = vi.fn(() => new Promise(resolve => { resolveEnable = () => resolve(true); }));
+    const screen = render(React.createElement(ProfileModal, makeProps({ onEnableCalendarSync })));
+
+    screen.firePressOnText('Off'); // starts the toggle; calendarBusy -> true
+    await screen.flush();
+
+    function collectText(node) {
+      if (typeof node === 'string') return node;
+      if (typeof node === 'number') return String(node);
+      if (!node || !node.children) return '';
+      return node.children.map(collectText).join('');
+    }
+    const deleteButton = screen.getAllByType('Pressable').find(p => collectText(p).includes('Delete Account'));
+    expect(deleteButton.props.disabled).toBe(true);
+
+    resolveEnable();
+    await screen.flush();
   });
 
   // On web, Alert.alert renders no actionable buttons, so confirmDelete must
@@ -158,5 +234,74 @@ describe('ProfileModal', () => {
     const screen = render(React.createElement(ProfileModal, makeProps({ onClose })));
     screen.firePressOnText('Close');
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  describe('calendar sync toggle', () => {
+    it('shows "Sync to Calendar" with an Off toggle when disabled', () => {
+      const screen = render(React.createElement(ProfileModal, makeProps({ calendarSyncEnabled: false })));
+      expect(screen.getByText('Sync to Calendar')).toBeTruthy();
+      expect(screen.getByText('Off')).toBeTruthy();
+    });
+
+    it('shows an On toggle when enabled', () => {
+      const screen = render(React.createElement(ProfileModal, makeProps({ calendarSyncEnabled: true })));
+      expect(screen.getByText('On')).toBeTruthy();
+    });
+
+    it('is hidden entirely on web (no native calendar API)', () => {
+      const originalOS = Platform.OS;
+      Platform.OS = 'web';
+      try {
+        const screen = render(React.createElement(ProfileModal, makeProps()));
+        expect(screen.queryByText('Sync to Calendar')).toBeNull();
+      } finally {
+        Platform.OS = originalOS;
+      }
+    });
+
+    it('tapping Off calls onEnableCalendarSync', async () => {
+      const onEnableCalendarSync = vi.fn(async () => true);
+      const screen = render(React.createElement(ProfileModal, makeProps({ calendarSyncEnabled: false, onEnableCalendarSync })));
+      screen.firePressOnText('Off');
+      await screen.flush();
+      expect(onEnableCalendarSync).toHaveBeenCalledOnce();
+    });
+
+    it('shows an error when calendar permission is denied', async () => {
+      const onEnableCalendarSync = vi.fn(async () => false);
+      const screen = render(React.createElement(ProfileModal, makeProps({ calendarSyncEnabled: false, onEnableCalendarSync })));
+      screen.firePressOnText('Off');
+      await screen.flush();
+      expect(screen.getByText(
+        'Calendar permission denied. Enable it for this app in your device Settings to sync assignments.'
+      )).toBeTruthy();
+    });
+
+    it('tapping On shows a three-way confirmation (Cancel / Keep Events / Delete Events)', () => {
+      const screen = render(React.createElement(ProfileModal, makeProps({ calendarSyncEnabled: true })));
+      screen.firePressOnText('On');
+      expect(Alert.alert).toHaveBeenCalledOnce();
+      const [title, , buttons] = Alert.alert.mock.calls[0];
+      expect(title).toBe('Turn off calendar sync?');
+      expect(buttons.map(b => b.text)).toEqual(['Cancel', 'Keep Events', 'Delete Events']);
+    });
+
+    it('choosing Keep Events calls onDisableCalendarSync(false)', async () => {
+      const onDisableCalendarSync = vi.fn(async () => {});
+      const screen = render(React.createElement(ProfileModal, makeProps({ calendarSyncEnabled: true, onDisableCalendarSync })));
+      screen.firePressOnText('On');
+      const [, , buttons] = Alert.alert.mock.calls[0];
+      await act(async () => { await buttons[1].onPress(); });
+      expect(onDisableCalendarSync).toHaveBeenCalledWith(false);
+    });
+
+    it('choosing Delete Events calls onDisableCalendarSync(true)', async () => {
+      const onDisableCalendarSync = vi.fn(async () => {});
+      const screen = render(React.createElement(ProfileModal, makeProps({ calendarSyncEnabled: true, onDisableCalendarSync })));
+      screen.firePressOnText('On');
+      const [, , buttons] = Alert.alert.mock.calls[0];
+      await act(async () => { await buttons[2].onPress(); });
+      expect(onDisableCalendarSync).toHaveBeenCalledWith(true);
+    });
   });
 });

@@ -69,6 +69,10 @@ function AppScreen() {
     update,
     remove,
     removeSeries,
+    calendarSyncEnabled,
+    calendarSyncLoaded,
+    enableCalendarSync,
+    disableCalendarSync,
   } = useAssignments(userId);
 
   // Ranking preference for "Work on next" (see hooks/usePreferences.js for
@@ -345,6 +349,10 @@ function AppScreen() {
         onClose={() => setProfileVisible(false)}
         email={session?.user?.email ?? ''}
         userId={session?.user?.id}
+        calendarSyncEnabled={calendarSyncEnabled}
+        calendarSyncLoaded={calendarSyncLoaded}
+        onEnableCalendarSync={enableCalendarSync}
+        onDisableCalendarSync={disableCalendarSync}
       />
 
       <ResetPasswordModal

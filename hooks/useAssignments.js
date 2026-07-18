@@ -22,6 +22,7 @@ import {
   storeDeviceTimezone,
 } from '../lib/notifications';
 import { uuidv4 } from '../lib/uuid';
+import { useCalendarOrchestration } from './useCalendarOrchestration';
 import { useReminderOrchestration } from './useReminderOrchestration';
 import { useRealtimeSync } from './useRealtimeSync';
 
@@ -47,6 +48,30 @@ export function useAssignments(userId) {
   // owns all OS-notification scheduling/cancellation + reminder-map
   // persistence. It holds no React state; every commit stays here.
   const reminders = useReminderOrchestration(userId);
+
+  // Calendar sync orchestration: same shape as `reminders`, but for the
+  // opt-in native-calendar mirror (see hooks/useCalendarOrchestration.js).
+  // Every one of its methods is internally gated on syncEnabled, so calling
+  // them unconditionally alongside the reminder calls below is safe and
+  // matches how `reminders` is already called unconditionally.
+  const calendar = useCalendarOrchestration(userId);
+  // Destructured because `calendar` itself is NOT a stable reference the way
+  // `reminders` is — it carries syncEnabled/loaded React state that changes
+  // asynchronously shortly after mount, so the whole object gets a fresh
+  // identity right after that settles. These four methods, individually,
+  // ARE stable per-userId (see useCalendarOrchestration.js). Effects and
+  // callbacks below depend on these specific functions, never on `calendar`
+  // as a whole — depending on the whole object would re-run the load effect
+  // (and thus re-fetch + re-schedule everything) a second time on every
+  // mount, right when syncEnabled/loaded finish loading from disk.
+  const {
+    scheduleFor: calendarScheduleFor,
+    scheduleBatchFor: calendarScheduleBatchFor,
+    cancelFor: calendarCancelFor,
+    reconcileOnLoad: calendarReconcileOnLoad,
+    enableSync: calendarEnableSync,
+    disableSync: calendarDisableSync,
+  } = calendar;
 
   // Monotonic counter for fetch attempts. Each successful local write also
   // bumps it so an in-flight fetch result older than the latest write is dropped.
@@ -262,10 +287,24 @@ export function useAssignments(userId) {
           // Permission or scheduling failed — assignments are already rendered.
         }
       }
+
+      // Block 3 — best-effort calendar backfill. Separate from Block 2 and
+      // independently try/caught so a calendar failure can never mask a
+      // reminder-scheduling failure or vice versa. Uses `merged` (the raw
+      // fetched rows) rather than reminders' `withReminders` — calendar
+      // sync doesn't touch reminderIds, so it doesn't need to wait on or
+      // depend on Block 2 succeeding. A no-op internally when sync is off.
+      if (!cancelled && merged && thisFetch >= dataVersionRef.current) {
+        try {
+          await calendarReconcileOnLoad(merged);
+        } catch {
+          // Permission or calendar-API failure — assignments already rendered.
+        }
+      }
     })();
 
     return () => { cancelled = true; };
-  }, [userId, reminders]);
+  }, [userId, reminders, calendarReconcileOnLoad]);
 
   // Keep a ref to the latest assignments list so the AppState listener can
   // read the current state without being recreated on every change. Using a
@@ -356,6 +395,15 @@ export function useAssignments(userId) {
       if (isCancelled()) return;
       const withReminders = { ...row, reminderIds };
 
+      // Calendar sync has no teardown-cancellation param, unlike reminders:
+      // a stray calendar event surviving a mid-flight logout is a single
+      // extra row the next reconcileOnLoad pass would just leave alone (no
+      // 64-slot OS cap to protect, unlike notifications), so the added
+      // complexity of a cancel-aware path isn't worth it here. Internally
+      // gated on syncEnabled — safe to call unconditionally.
+      await calendarScheduleFor(row);
+      if (isCancelled()) return;
+
       commitLocal(prev => {
         if (prev.some(a => a.id === row.id)) {
           return prev.map(a => a.id === row.id ? withReminders : a);
@@ -369,7 +417,7 @@ export function useAssignments(userId) {
         return [withReminders, ...prev];
       });
     })
-  ), [enqueueForId, isOwnEcho, isTombstoned, reminders, commitLocal]);
+  ), [enqueueForId, isOwnEcho, isTombstoned, reminders, calendarScheduleFor, commitLocal]);
 
   const onInsert = useCallback((row, isCancelled) => {
     // Fast-path: an INSERT echo is provably ours if any marker for this id
@@ -396,10 +444,11 @@ export function useAssignments(userId) {
       // check does not apply to DELETE.
       if (isOwnEcho(id, 'DELETE', null)) return;
       await reminders.cancelFor(id);
+      await calendarCancelFor(id);
       if (isCancelled()) return;
       commitLocal(prev => prev.filter(a => a.id !== id));
     })
-  ), [enqueueForId, isOwnEcho, reminders, commitLocal]);
+  ), [enqueueForId, isOwnEcho, reminders, calendarCancelFor, commitLocal]);
 
   const onError = useCallback(msg => setSyncError(msg), []);
 
@@ -425,6 +474,7 @@ export function useAssignments(userId) {
       }
       settleSelfMutation(saved.id, saved);
       const reminderIds = await reminders.scheduleFor(saved);
+      await calendarScheduleFor(saved);
       const withReminders = { ...saved, reminderIds };
       commitLocal(prev => prev.some(a => a.id === saved.id)
         ? prev.map(a => a.id === saved.id ? withReminders : a)
@@ -432,7 +482,7 @@ export function useAssignments(userId) {
       );
       return withReminders;
     });
-  }, [userId, commitLocal, markPendingInsert, settleSelfMutation, clearSelfMutation, enqueueForId, reminders]);
+  }, [userId, commitLocal, markPendingInsert, settleSelfMutation, clearSelfMutation, enqueueForId, reminders, calendarScheduleFor]);
 
   const insertMany = useCallback(drafts => {
     const withIds = drafts.map(d => ({ ...d, id: uuidv4() }));
@@ -456,6 +506,7 @@ export function useAssignments(userId) {
       // pending-slot budget — avoids overcounting when parallel calls each
       // read the same pending count and collectively overrun the 64-cap.
       const reminderIdsList = await reminders.scheduleBatchFor(saved);
+      await calendarScheduleBatchFor(saved);
       const withReminders = saved.map((a, i) => ({ ...a, reminderIds: reminderIdsList[i] }));
       commitLocal(prev => {
         const byId = new Map(prev.map(a => [a.id, a]));
@@ -482,7 +533,7 @@ export function useAssignments(userId) {
       }
     }
     return primary;
-  }, [userId, commitLocal, markPendingInsert, settleSelfMutation, clearSelfMutation, enqueueForId, reminders]);
+  }, [userId, commitLocal, markPendingInsert, settleSelfMutation, clearSelfMutation, enqueueForId, reminders, calendarScheduleBatchFor]);
 
   const update = useCallback((id, changes) => enqueueForId(id, async () => {
     // The whole UPDATE flow runs inside the per-id queue. That way an
@@ -496,11 +547,12 @@ export function useAssignments(userId) {
     // in-memory state, which may be stale), schedules new ones unless the
     // row is now completed, and persists/prunes the map entry.
     const reminderIds = await reminders.scheduleFor(updated);
+    await calendarScheduleFor(updated);
 
     const withReminders = { ...updated, reminderIds };
     commitLocal(prev => prev.map(a => a.id === id ? withReminders : a));
     return withReminders;
-  }), [userId, commitLocal, settleSelfMutation, enqueueForId, reminders]);
+  }), [userId, commitLocal, settleSelfMutation, enqueueForId, reminders, calendarScheduleFor]);
 
   const remove = useCallback(id => enqueueForId(id, async () => {
     // Still no self-mutation marker — DELETE is idempotent on state and
@@ -519,8 +571,9 @@ export function useAssignments(userId) {
     await dbDelete(id, userId);
     markTombstone(id);
     await reminders.cancelFor(id);
+    await calendarCancelFor(id);
     commitLocal(prev => prev.filter(a => a.id !== id));
-  }), [userId, commitLocal, enqueueForId, markTombstone, reminders]);
+  }), [userId, commitLocal, enqueueForId, markTombstone, reminders, calendarCancelFor]);
 
   // Delete every assignment in a recurring series at once. Shares ONE
   // batch task across the per-id queues of ALL affected ids — same
@@ -538,6 +591,7 @@ export function useAssignments(userId) {
       for (const id of ids) {
         markTombstone(id);
         await reminders.cancelFor(id);
+        await calendarCancelFor(id);
       }
       commitLocal(prev => prev.filter(a => a.seriesId !== seriesId));
     };
@@ -551,10 +605,23 @@ export function useAssignments(userId) {
       }
     }
     return primary;
-  }, [assignments, userId, commitLocal, enqueueForId, markTombstone, reminders]);
+  }, [assignments, userId, commitLocal, enqueueForId, markTombstone, reminders, calendarCancelFor]);
 
   const clearSyncError = useCallback(() => setSyncError(''), []);
   const reportSyncError = useCallback(msg => setSyncError(msg), []);
+
+  // Thin wrappers that close over the current `assignments` state so callers
+  // (ProfileModal, via App.js) don't need to pass the list themselves —
+  // backfilling every current assignment on enable is an implementation
+  // detail of "turning sync on", not something the UI layer should own.
+  const enableCalendarSync = useCallback(
+    () => calendarEnableSync(assignments),
+    [calendarEnableSync, assignments],
+  );
+  const disableCalendarSync = useCallback(
+    deleteEvents => calendarDisableSync(deleteEvents),
+    [calendarDisableSync],
+  );
 
   return {
     assignments,
@@ -567,6 +634,10 @@ export function useAssignments(userId) {
     update,
     remove,
     removeSeries,
+    calendarSyncEnabled: calendar.syncEnabled,
+    calendarSyncLoaded: calendar.loaded,
+    enableCalendarSync,
+    disableCalendarSync,
   };
 }
 
