@@ -188,6 +188,9 @@ jest.mock('./lib/supabase', () => {
   };
 
   return {
+    // startAuthAutoRefresh — used by App.js's mount-effect wiring. Returns
+    // a removable-shaped subscription so the effect's cleanup can call it.
+    startAuthAutoRefresh: jest.fn(() => ({ remove: jest.fn() })),
     supabase: {
       from: chain.from,
       // channel/removeChannel — used by useAssignments realtime subscription.

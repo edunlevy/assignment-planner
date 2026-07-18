@@ -9,7 +9,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 
 import { useReminderOrchestration } from '../../hooks/useReminderOrchestration';
-import { currentDeviceTimezone } from '../../lib/notifications';
+import { currentDeviceTimezone, reminderSig } from '../../lib/notifications';
 import { renderHook, flushMicrotasks } from '../helpers/renderHook';
 
 const USER_ID = 'user-1';
@@ -127,7 +127,7 @@ describe('scheduleFor', () => {
     expect(map.a1).toBeUndefined();
   });
 
-  test('schedule failure: returns empty ids, writes no map entry', async () => {
+  test('schedule failure on a fresh insert (no pre-existing reminders): returns empty ids, writes no map entry', async () => {
     Notifications.scheduleNotificationAsync.mockRejectedValue(new Error('OS denied'));
 
     const api = mount();
@@ -137,6 +137,44 @@ describe('scheduleFor', () => {
     expect(ids).toEqual([]);
     const map = await readMap();
     expect(map.a1).toBeUndefined();
+  });
+
+  test('transient scheduling failure during an UPDATE preserves the still-valid old reminders instead of losing them', async () => {
+    // Regression test for a silent-data-loss bug: previously old ids were
+    // cancelled BEFORE the new ones were confirmed scheduled, so a transient
+    // OS/permission failure during an edit could delete working reminders
+    // and leave nothing in their place. importance isn't part of the
+    // scheduling-relevant sig, so the stored sig still matches — a strong
+    // signal that an empty result here is a failure, not a legitimate
+    // "nothing to schedule".
+    const original = row();
+    await writeMap({ a1: { ids: ['old-24h', 'old-1h'], sig: reminderSig(original) } });
+    Notifications.scheduleNotificationAsync.mockRejectedValue(new Error('OS denied'));
+
+    const api = mount();
+    await flushMicrotasks();
+    const ids = await api.current.scheduleFor(row({ importance: 5 }));
+
+    expect(ids).toEqual(['old-24h', 'old-1h']);
+    expect(Notifications.cancelScheduledNotificationAsync).not.toHaveBeenCalled();
+    expect(await readMap()).toEqual({ a1: { ids: ['old-24h', 'old-1h'], sig: reminderSig(original) } });
+  });
+
+  test('a due date that legitimately moved into the past still clears old reminders even though scheduling returns empty', async () => {
+    // Distinguishes the fix above from silently NEVER clearing reminders:
+    // when the reminder-relevant content actually changed (dueDate here),
+    // an empty result is trusted as legitimate — every trigger for the new
+    // due date really is in the past — and old reminders are cleared.
+    await writeMap({ a1: { ids: ['old-24h', 'old-1h'], sig: 'some-other-sig' } });
+
+    const api = mount();
+    await flushMicrotasks();
+    const ids = await api.current.scheduleFor(row({ dueDate: '2020-01-01' }));
+
+    expect(ids).toEqual([]);
+    expect(Notifications.cancelScheduledNotificationAsync).toHaveBeenCalledWith('old-24h');
+    expect(Notifications.cancelScheduledNotificationAsync).toHaveBeenCalledWith('old-1h');
+    expect(await readMap()).toEqual({});
   });
 
   test('torn down mid-schedule (realtime path): cancels just-scheduled ids, no leak', async () => {
@@ -176,12 +214,12 @@ describe('scheduleFor', () => {
     expect(await readMap()).toEqual({ a1: { ids: ['old-24h', 'old-1h'], sig: 'keep' } });
   });
 
-  test('torn down AFTER pre-cancel: prunes the now-stale map entry so a later load reschedules', async () => {
-    // Old ids on disk get cancelled, new ids scheduled then cancelled by the
-    // mid-flight teardown. The map entry pointed at the cancelled old ids and
-    // its sig might still match the assignment, so leaving it would make a
-    // later reconcileOnLoad skip rescheduling (matching sig) — silently losing
-    // notifications. The entry MUST be removed.
+  test('torn down mid-flight during an UPDATE: cancels just-scheduled new ids, leaves the pre-existing old ones and map untouched', async () => {
+    // With the schedule-before-cancel ordering, a mid-flight teardown means
+    // the old (still-valid, still-tracked) reminders were never touched —
+    // the edit simply didn't happen. That's a cleaner outcome than the old
+    // cancel-old-then-teardown-then-prune dance and needs no special map
+    // recovery: what's on disk already matches what's actually scheduled.
     await writeMap({ a1: { ids: ['old-24h', 'old-1h'], sig: 'stale' } });
     Notifications.scheduleNotificationAsync
       .mockResolvedValueOnce('new-24h')
@@ -193,14 +231,14 @@ describe('scheduleFor', () => {
     const ids = await api.current.scheduleFor(row(), () => calls++ > 0);
 
     expect(ids).toEqual([]);
-    // Old ids cancelled by the pre-cancel.
-    expect(Notifications.cancelScheduledNotificationAsync).toHaveBeenCalledWith('old-24h');
-    expect(Notifications.cancelScheduledNotificationAsync).toHaveBeenCalledWith('old-1h');
-    // New ids cancelled by the teardown cleanup.
+    // Old ids were never touched — the edit was aborted before the swap.
+    expect(Notifications.cancelScheduledNotificationAsync).not.toHaveBeenCalledWith('old-24h');
+    expect(Notifications.cancelScheduledNotificationAsync).not.toHaveBeenCalledWith('old-1h');
+    // New ids cancelled by the teardown cleanup so they don't leak.
     expect(Notifications.cancelScheduledNotificationAsync).toHaveBeenCalledWith('new-24h');
     expect(Notifications.cancelScheduledNotificationAsync).toHaveBeenCalledWith('new-1h');
-    // Stale entry pruned → next load treats the row as unscheduled.
-    expect(await readMap()).toEqual({});
+    // Map untouched — still matches the old (still-scheduled) ids.
+    expect(await readMap()).toEqual({ a1: { ids: ['old-24h', 'old-1h'], sig: 'stale' } });
   });
 });
 

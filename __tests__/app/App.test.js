@@ -2,7 +2,7 @@ import React from 'react';
 import { act } from 'react-test-renderer';
 import { render } from '../helpers/renderWithProviders';
 import { makeAssignment, resetAssignmentCounter } from '../helpers/mockAssignment';
-import { supabase } from '../../lib/supabase';
+import { startAuthAutoRefresh, supabase } from '../../lib/supabase';
 
 // --- Mock useAssignments so App.js's branching logic is isolated from the
 // hook's internals (covered separately in hooks/useAssignments tests). ---
@@ -96,6 +96,20 @@ describe('App', () => {
     const screen = render(React.createElement(App));
     await screen.flush();
     expect(screen.getByText('AuthScreenStub')).toBeTruthy();
+  });
+
+  it('starts the Supabase auth auto-refresh listener on mount and removes it on unmount', async () => {
+    // Regression test: the listener used to be registered at lib/supabase.js
+    // module-evaluation time with no way to remove it. It's now owned by an
+    // App.js mount-effect with a cleanup, so this is where its lifecycle is
+    // actually observable/testable.
+    supabase.auth.getSession.mockResolvedValue({ data: { session: null } });
+    const screen = render(React.createElement(App));
+    await screen.flush();
+    expect(startAuthAutoRefresh).toHaveBeenCalledOnce();
+    const sub = startAuthAutoRefresh.mock.results[0].value;
+    screen.unmount();
+    expect(sub.remove).toHaveBeenCalledOnce();
   });
 
   it('shows "Loading…" when logged in but assignments not yet loaded', async () => {
