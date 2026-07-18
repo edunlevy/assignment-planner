@@ -92,7 +92,8 @@ describe('ProfileModal', () => {
 
   it('confirming delete wipes local data and signs out', async () => {
     const onClose = vi.fn();
-    const screen = render(React.createElement(ProfileModal, makeProps({ onClose })));
+    const onDisableCalendarSync = vi.fn(async () => {});
+    const screen = render(React.createElement(ProfileModal, makeProps({ onClose, onDisableCalendarSync })));
     screen.firePressOnText('Delete Account');
     const [, , buttons] = Alert.alert.mock.calls[0];
     await act(async () => { await buttons[1].onPress(); });
@@ -101,6 +102,42 @@ describe('ProfileModal', () => {
     expect(saveReminderMap).toHaveBeenCalledWith('user-123', {});
     expect(AsyncStorage.removeItem).toHaveBeenCalledWith('assignments_user-123');
     expect(GoogleSignin.signOut).toHaveBeenCalledOnce();
+    expect(supabase.auth.signOut).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledOnce();
+    // calendarSyncEnabled defaults to false in these props — no reason to
+    // touch calendar sync for an account that never turned it on.
+    expect(onDisableCalendarSync).not.toHaveBeenCalled();
+  });
+
+  it('confirming delete also deletes synced calendar events when calendar sync was on', async () => {
+    const onDisableCalendarSync = vi.fn(async () => {});
+    const screen = render(React.createElement(ProfileModal, makeProps({
+      calendarSyncEnabled: true,
+      onDisableCalendarSync,
+    })));
+    screen.firePressOnText('Delete Account');
+    const [, , buttons] = Alert.alert.mock.calls[0];
+    await act(async () => { await buttons[1].onPress(); });
+    expect(supabase.rpc).toHaveBeenCalledWith('delete_user');
+    // true: the account and every assignment are gone, so the synced
+    // calendar events must go too, not just be left behind detached.
+    expect(onDisableCalendarSync).toHaveBeenCalledWith(true);
+  });
+
+  it('a calendar-sync cleanup failure during delete does not block the rest of local cleanup', async () => {
+    const onClose = vi.fn();
+    const onDisableCalendarSync = vi.fn(async () => { throw new Error('calendar API down'); });
+    const screen = render(React.createElement(ProfileModal, makeProps({
+      onClose,
+      calendarSyncEnabled: true,
+      onDisableCalendarSync,
+    })));
+    screen.firePressOnText('Delete Account');
+    const [, , buttons] = Alert.alert.mock.calls[0];
+    await act(async () => { await buttons[1].onPress(); });
+    // Account deletion already succeeded server-side by this point — a
+    // best-effort calendar failure must not strand the user mid-flow.
+    expect(saveReminderMap).toHaveBeenCalledWith('user-123', {});
     expect(supabase.auth.signOut).toHaveBeenCalledOnce();
     expect(onClose).toHaveBeenCalledOnce();
   });

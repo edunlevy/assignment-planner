@@ -79,9 +79,19 @@ export default function ProfileModal({
       }
 
       // Deletion succeeded — wipe all local data for this user.
-      // Order: reminders first (cancel OS notifications), then maps and
-      // assignment cache (privacy + prevents stale data resurfacing).
+      // Order: reminders first (cancel OS notifications), then calendar
+      // sync if it was ever enabled, then maps and assignment cache
+      // (privacy + prevents stale data resurfacing).
       await cancelAllReminders();
+      if (calendarSyncEnabled) {
+        // deleteEvents: true — the account and every assignment are gone,
+        // so the synced calendar events must go too, matching the
+        // "permanently erases... everything" promise in confirmDelete's
+        // message above. Best-effort: account deletion already succeeded
+        // server-side by this point, so a calendar API failure here must
+        // not block the rest of local cleanup or leave the user stuck.
+        await onDisableCalendarSync(true).catch(() => {});
+      }
       if (userId) {
         await saveReminderMap(userId, {});
         // Remove the assignment cache so deleted data can't resurface
