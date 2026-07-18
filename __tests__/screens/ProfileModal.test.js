@@ -142,6 +142,33 @@ describe('ProfileModal', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it('Delete Account is disabled while a calendar-sync toggle is in flight, closing a race with account deletion', async () => {
+    // Regression test: calendarSyncEnabled is a snapshot passed down as a
+    // prop. Without this guard, tapping Delete Account while an enable-sync
+    // toggle is still in flight would read the pre-toggle (stale) false
+    // value, skip the calendar cleanup in handleDelete, and could leave
+    // events the in-flight toggle creates moments later permanently
+    // orphaned (the account — and any record of them — is already gone).
+    let resolveEnable;
+    const onEnableCalendarSync = vi.fn(() => new Promise(resolve => { resolveEnable = () => resolve(true); }));
+    const screen = render(React.createElement(ProfileModal, makeProps({ onEnableCalendarSync })));
+
+    screen.firePressOnText('Off'); // starts the toggle; calendarBusy -> true
+    await screen.flush();
+
+    function collectText(node) {
+      if (typeof node === 'string') return node;
+      if (typeof node === 'number') return String(node);
+      if (!node || !node.children) return '';
+      return node.children.map(collectText).join('');
+    }
+    const deleteButton = screen.getAllByType('Pressable').find(p => collectText(p).includes('Delete Account'));
+    expect(deleteButton.props.disabled).toBe(true);
+
+    resolveEnable();
+    await screen.flush();
+  });
+
   // On web, Alert.alert renders no actionable buttons, so confirmDelete must
   // fall back to window.confirm (matching hooks/useAssignmentForm.js). The
   // test environment is `node`, so window is stubbed per-test.

@@ -215,9 +215,9 @@ export default function ProfileModal({
           </Pressable>
 
           <Pressable
-            style={[styles.deleteButton, (loading || deleting) && styles.signOutButtonDisabled]}
+            style={[styles.deleteButton, (loading || deleting || calendarBusy) && styles.signOutButtonDisabled]}
             onPress={confirmDelete}
-            disabled={loading || deleting}
+            disabled={loading || deleting || calendarBusy}
           >
             {deleting
               ? <ActivityIndicator color="#FFFFFF" />
