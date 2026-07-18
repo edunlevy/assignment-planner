@@ -126,6 +126,32 @@ describe('scheduleReminders', () => {
     Date.now.mockRestore();
   });
 
+  test('reservedSlots offsets the pending-cap snapshot so a caller freeing its own slots is not blocked by them', async () => {
+    const now = new Date('2026-05-15T08:00:00').getTime();
+    jest.spyOn(Date, 'now').mockReturnValue(now);
+
+    // Same 61-pending scenario as the exhausted-headroom test above (0
+    // slots remaining) — but this caller is about to free 2 of its own
+    // pending slots, so it should still get both reminders scheduled.
+    Notifications.getAllScheduledNotificationsAsync.mockResolvedValueOnce(
+      new Array(61).fill({ identifier: 'x' })
+    );
+    Notifications.scheduleNotificationAsync
+      .mockResolvedValueOnce('r-24h')
+      .mockResolvedValueOnce('r-1h');
+
+    const ids = await scheduleReminders({
+      id: 'a1',
+      title: 't',
+      course: 'c',
+      dueDate: '2026-05-20',
+    }, 2);
+
+    expect(ids).toEqual(['r-24h', 'r-1h']);
+
+    Date.now.mockRestore();
+  });
+
   test('returns [] on web without scheduling', async () => {
     Platform.OS = 'web';
     const ids = await scheduleReminders({

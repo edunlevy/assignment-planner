@@ -113,6 +113,27 @@ describe('scheduleFor', () => {
     expect(map.a1.ids).toEqual(['new-24h', 'new-1h']);
   });
 
+  test('near the iOS pending-notification cap, reserves the row\'s OWN still-scheduled old slots so its replacement schedule is not blocked by itself', async () => {
+    // 61 pending notifications include this row's own 2 old ones, which are
+    // about to be freed once the new schedule is confirmed. Without
+    // reserving them, makeSlotBudget's snapshot (taken before the old ones
+    // are cancelled, since cancelling now happens AFTER scheduling) would
+    // see remaining = max(0, 64-4-61) = 0 and fail to schedule replacements
+    // for a row that isn't actually contributing net-new load.
+    const pending = Array.from({ length: 61 }, (_, i) => ({ identifier: `pending-${i}` }));
+    Notifications.getAllScheduledNotificationsAsync.mockResolvedValue(pending);
+    await writeMap({ a1: { ids: ['old-24h', 'old-1h'], sig: 'stale' } });
+    Notifications.scheduleNotificationAsync
+      .mockResolvedValueOnce('new-24h')
+      .mockResolvedValueOnce('new-1h');
+
+    const api = mount();
+    await flushMicrotasks();
+    const ids = await api.current.scheduleFor(row({ title: 'Edited' }));
+
+    expect(ids).toEqual(['new-24h', 'new-1h']);
+  });
+
   test('completed: cancels old ids, schedules nothing, deletes map entry', async () => {
     await writeMap({ a1: { ids: ['old-24h', 'old-1h'], sig: 's' } });
 

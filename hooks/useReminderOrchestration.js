@@ -63,8 +63,13 @@ export function useReminderOrchestration(userId) {
     const map = await loadReminderMap(userId);
     const oldEntry = map[assignment.id];
     const oldIds = reminderEntryIds(oldEntry ?? []);
+    // Pass oldIds.length as reservedSlots: these old reminders are about to
+    // be cancelled once the new schedule is confirmed, so they shouldn't
+    // count against the very iOS budget snapshot this call takes (which is
+    // read BEFORE they're cancelled, since cancelling now happens after —
+    // see scheduleReminders' reservedSlots doc for why).
     const reminderIds = assignment.status !== 'completed'
-      ? await scheduleReminders(assignment)
+      ? await scheduleReminders(assignment, oldIds.length)
       : [];
 
     if (shouldCancel && shouldCancel()) {
@@ -80,11 +85,12 @@ export function useReminderOrchestration(userId) {
     // relevant content (dueDate/dueTime/title/course) is UNCHANGED from
     // what's already on disk, but scheduling just produced nothing — almost
     // certainly the transient-failure case above, not a legitimate "nothing
-    // to schedule" outcome (which would only happen here if every trigger
-    // time had passed since the LAST successful schedule, since nothing
-    // about the due date moved). Preserve the still-valid old reminders
-    // rather than silently leaving the assignment with none; the next
-    // successful edit or reconcileOnLoad pass will retry.
+    // to schedule" outcome (every trigger time already passed, or the iOS
+    // pending-cap was hit — either would require something to have changed
+    // since the LAST successful schedule, since neither the due date nor
+    // reservedSlots' own-slot accounting moved). Preserve the still-valid
+    // old reminders rather than silently leaving the assignment with none;
+    // the next successful edit or reconcileOnLoad pass will retry.
     if (
       assignment.status !== 'completed' &&
       reminderIds.length === 0 &&
