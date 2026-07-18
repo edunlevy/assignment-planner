@@ -21,7 +21,7 @@ import { useAssignments } from './hooks/useAssignments';
 import { usePreferences } from './hooks/usePreferences';
 import { parseAuthRedirect } from './lib/deepLink';
 import { buildWeeklySeries } from './lib/recurring';
-import { supabase } from './lib/supabase';
+import { startAuthAutoRefresh, supabase } from './lib/supabase';
 import { uuidv4 } from './lib/uuid';
 import AuthScreen from './screens/AuthScreen';
 import ProfileModal from './screens/ProfileModal';
@@ -55,6 +55,15 @@ function AppScreen() {
       clearInterval(interval);
       sub.remove();
     };
+  }, []);
+
+  // Own the Supabase auth auto-refresh AppState listener's lifecycle here
+  // (mount once, remove on unmount) instead of lib/supabase.js registering
+  // an unremovable listener at module-evaluation time — see
+  // startAuthAutoRefresh's comment for why that leaked across Fast Refresh.
+  useEffect(() => {
+    const sub = startAuthAutoRefresh();
+    return () => sub?.remove();
   }, []);
 
   const userId = session?.user?.id ?? null;

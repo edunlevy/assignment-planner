@@ -13,6 +13,7 @@ import DueTimeField from './DueTimeField';
 import RecurringSeriesSection from './RecurringSeriesSection';
 import { STATUS_LABELS, STATUS_COLORS, COMPLEXITY_OPTIONS, PRIMARY, WHITE } from '../lib/constants';
 import { useAssignmentForm } from '../hooks/useAssignmentForm';
+import { styles } from './AssignmentFormModal.styles';
 
 // Modal form for creating or editing an assignment.
 // Form state/validation/submit logic lives in useAssignmentForm; this
@@ -214,4 +215,3 @@ export default function AssignmentFormModal({
     </Modal>
   );
 }
-import { styles } from './AssignmentFormModal.styles';

@@ -31,14 +31,23 @@ import {
 // re-running effects more often than the underlying userId changes.
 export function useReminderOrchestration(userId) {
   // Schedule (or refresh) reminders for ONE assignment.
-  // - Loads the map; cancels any existing on-disk ids for this id
-  //   (cancelReminders([]) is a no-op, so fresh inserts make no OS calls).
-  // - Schedules fresh reminders unless the assignment is completed.
+  // - Loads the map, then schedules fresh reminders FIRST — before touching
+  //   any existing on-disk ids for this id — and only cancels the old ones
+  //   once the new schedule is confirmed. This ordering matters: scheduling
+  //   can legitimately produce fewer/zero ids (a trigger already passed, the
+  //   iOS pending-cap was hit), but it can also fail transiently (permission
+  //   revoked mid-session, a one-off OS scheduling error — see
+  //   scheduleRemindersForBudget's swallowed catch in lib/notifications.js).
+  //   Cancelling old ids BEFORE confirming the replacement worked meant a
+  //   transient failure during an edit could silently delete working
+  //   reminders and leave nothing in their place. Scheduling first means a
+  //   failure leaves the old ones exactly as they were — nothing lost yet —
+  //   and lets the empty-result-but-content-unchanged check below decide
+  //   whether to trust the empty result or preserve what's already working.
   // - Writes a {ids, sig} map entry when ids are non-empty, else deletes it.
-  // Returns the new reminder id array.
-  // Unifies insert's schedule+map, update's cancel-from-disk+schedule+map,
-  // and the realtime reconcileRemoteUpsert path. The pre-cancel always reads
-  // the DISK map (never in-memory state) so stale in-memory ids can't leak.
+  // Returns the new reminder id array (or the preserved old ones — see below).
+  // Unifies insert's schedule+map, update's schedule+cancel-old+map, and the
+  // realtime reconcileRemoteUpsert path.
   //
   // `shouldCancel` is optional and only the realtime upsert path passes it.
   // Realtime events fire unpredictably and can land exactly as the user logs
@@ -52,26 +61,46 @@ export function useReminderOrchestration(userId) {
     if (shouldCancel && shouldCancel()) return [];
 
     const map = await loadReminderMap(userId);
-    const oldIds = reminderEntryIds(map[assignment.id] ?? []);
-    await cancelReminders(oldIds);
+    const oldEntry = map[assignment.id];
+    const oldIds = reminderEntryIds(oldEntry ?? []);
+    // Pass oldIds.length as reservedSlots: these old reminders are about to
+    // be cancelled once the new schedule is confirmed, so they shouldn't
+    // count against the very iOS budget snapshot this call takes (which is
+    // read BEFORE they're cancelled, since cancelling now happens after —
+    // see scheduleReminders' reservedSlots doc for why).
     const reminderIds = assignment.status !== 'completed'
-      ? await scheduleReminders(assignment)
+      ? await scheduleReminders(assignment, oldIds.length)
       : [];
+
     if (shouldCancel && shouldCancel()) {
-      // Torn down mid-flight, AFTER we already cancelled the old ids above.
-      // Undo the just-scheduled notifications so they don't leak, then drop
-      // the now-stale map entry: it still points at the old ids we cancelled,
-      // and its sig may match the assignment's current sig, so a later load
-      // would see "matching sig" and skip rescheduling — silently leaving the
-      // assignment with no OS notifications. Removing the entry forces the
-      // next reconcileOnLoad to treat the row as unscheduled and reschedule.
+      // Torn down mid-flight. The old ids and the map were never touched —
+      // still exactly consistent with what's actually on the OS — so there's
+      // nothing to prune; just undo whatever we just scheduled so it doesn't
+      // leak for a signed-out user.
       if (reminderIds.length > 0) await cancelReminders(reminderIds).catch(() => {});
-      if (map[assignment.id]) {
-        delete map[assignment.id];
-        await saveReminderMap(userId, map);
-      }
       return [];
     }
+
+    // A non-completed row that HAD working reminders, whose scheduling-
+    // relevant content (dueDate/dueTime/title/course) is UNCHANGED from
+    // what's already on disk, but scheduling just produced nothing — almost
+    // certainly the transient-failure case above, not a legitimate "nothing
+    // to schedule" outcome (every trigger time already passed, or the iOS
+    // pending-cap was hit — either would require something to have changed
+    // since the LAST successful schedule, since neither the due date nor
+    // reservedSlots' own-slot accounting moved). Preserve the still-valid
+    // old reminders rather than silently leaving the assignment with none;
+    // the next successful edit or reconcileOnLoad pass will retry.
+    if (
+      assignment.status !== 'completed' &&
+      reminderIds.length === 0 &&
+      oldIds.length > 0 &&
+      reminderEntrySig(oldEntry) === reminderSig(assignment)
+    ) {
+      return oldIds;
+    }
+
+    await cancelReminders(oldIds);
     if (reminderIds.length > 0) {
       map[assignment.id] = makeReminderEntry(reminderIds, reminderSig(assignment));
     } else {
