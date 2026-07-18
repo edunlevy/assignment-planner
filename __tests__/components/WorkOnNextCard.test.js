@@ -39,6 +39,21 @@ describe('WorkOnNextCard', () => {
     expect(screen.getByText('Work on next')).toBeTruthy();
   });
 
+  it('subtitle reflects the default ranking\'s top factor (due date) when no ranking prop is passed', () => {
+    const a = makeAssignment({ dueDate: '2026-06-15' });
+    const screen = render(React.createElement(WorkOnNextCard, { assignment: a }));
+    // The factor phrase is its own JSX child (split from the surrounding
+    // "Prioritised by your ranking — ... first" text), so it's matched exactly.
+    expect(screen.getByText('due date')).toBeTruthy();
+  });
+
+  it('subtitle reflects a custom ranking\'s top factor', () => {
+    const a = makeAssignment({ dueDate: '2026-06-15' });
+    const ranking = ['complexity', 'importance', 'dueDate'];
+    const screen = render(React.createElement(WorkOnNextCard, { assignment: a, ranking }));
+    expect(screen.getByText('length')).toBeTruthy();
+  });
+
   it('renders the complexity label for short assignments', () => {
     const a = makeAssignment({ complexity: 'short', dueDate: '2026-06-15' });
     const screen = render(React.createElement(WorkOnNextCard, { assignment: a }));
