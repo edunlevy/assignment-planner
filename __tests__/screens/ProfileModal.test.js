@@ -101,12 +101,34 @@ describe('ProfileModal', () => {
     expect(cancelAllReminders).toHaveBeenCalledOnce();
     expect(saveReminderMap).toHaveBeenCalledWith('user-123', {});
     expect(AsyncStorage.removeItem).toHaveBeenCalledWith('assignments_user-123');
+    // The local ranking-preference cache (hooks/usePreferences.js) must be
+    // wiped too — the server-side row is deleted by delete_user() itself,
+    // but nothing else clears this AsyncStorage mirror.
+    expect(AsyncStorage.removeItem).toHaveBeenCalledWith('ranking_user-123');
     expect(GoogleSignin.signOut).toHaveBeenCalledOnce();
     expect(supabase.auth.signOut).toHaveBeenCalledOnce();
     expect(onClose).toHaveBeenCalledOnce();
     // calendarSyncEnabled defaults to false in these props — no reason to
     // touch calendar sync for an account that never turned it on.
     expect(onDisableCalendarSync).not.toHaveBeenCalled();
+  });
+
+  it('Delete Account is disabled until calendarSyncLoaded, so a fast tap cannot skip calendar cleanup with the pre-load default', () => {
+    // Regression test: calendarSyncEnabled starts false and only becomes
+    // trustworthy once calendarSyncLoaded flips true (see
+    // hooks/useCalendarOrchestration.js). Without this guard, deleting the
+    // account before that AsyncStorage read resolves would read the
+    // default false snapshot and skip onDisableCalendarSync even if sync
+    // was actually on.
+    const screen = render(React.createElement(ProfileModal, makeProps({ calendarSyncLoaded: false })));
+    function collectText(node) {
+      if (typeof node === 'string') return node;
+      if (typeof node === 'number') return String(node);
+      if (!node || !node.children) return '';
+      return node.children.map(collectText).join('');
+    }
+    const deleteButton = screen.getAllByType('Pressable').find(p => collectText(p).includes('Delete Account'));
+    expect(deleteButton.props.disabled).toBe(true);
   });
 
   it('confirming delete also deletes synced calendar events when calendar sync was on', async () => {

@@ -83,6 +83,12 @@ export default function ProfileModal({
       // sync if it was ever enabled, then maps and assignment cache
       // (privacy + prevents stale data resurfacing).
       await cancelAllReminders();
+      // calendarSyncEnabled is a prop snapshot that only becomes trustworthy
+      // once calendarSyncLoaded flips true (see useCalendarOrchestration.js —
+      // it starts false and is read from AsyncStorage asynchronously). The
+      // Delete Account button below is disabled until calendarSyncLoaded, so
+      // by the time handleDelete can run at all, this reflects the real
+      // on-disk state rather than the pre-load default.
       if (calendarSyncEnabled) {
         // deleteEvents: true — the account and every assignment are gone,
         // so the synced calendar events must go too, matching the
@@ -94,9 +100,13 @@ export default function ProfileModal({
       }
       if (userId) {
         await saveReminderMap(userId, {});
-        // Remove the assignment cache so deleted data can't resurface
-        // if session cleanup misbehaves after the account is gone.
+        // Remove the assignment cache and ranking preference cache so
+        // deleted data can't resurface if session cleanup misbehaves after
+        // the account is gone. The server-side preferences row is deleted
+        // by delete_user() itself (see the migration); this is only the
+        // local AsyncStorage mirror usePreferences.js keeps.
         await AsyncStorage.removeItem(`assignments_${userId}`);
+        await AsyncStorage.removeItem(`ranking_${userId}`);
       }
       // Best-effort Google SDK sign-out for the same reason as handleSignOut.
       await GoogleSignin.signOut().catch(() => {});
@@ -215,9 +225,12 @@ export default function ProfileModal({
           </Pressable>
 
           <Pressable
-            style={[styles.deleteButton, (loading || deleting || calendarBusy) && styles.signOutButtonDisabled]}
+            style={[
+              styles.deleteButton,
+              (loading || deleting || calendarBusy || !calendarSyncLoaded) && styles.signOutButtonDisabled,
+            ]}
             onPress={confirmDelete}
-            disabled={loading || deleting || calendarBusy}
+            disabled={loading || deleting || calendarBusy || !calendarSyncLoaded}
           >
             {deleting
               ? <ActivityIndicator color="#FFFFFF" />
