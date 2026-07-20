@@ -195,18 +195,43 @@ describe('deleteEventFor', () => {
 });
 
 describe('deleteAssignmentCalendar', () => {
-  test('deletes the calendar', async () => {
-    await deleteAssignmentCalendar('cal-1');
+  test('deletes the calendar and confirms it via the live list', async () => {
+    Calendar.getCalendarsAsync.mockResolvedValue([]); // no longer present
+    const confirmed = await deleteAssignmentCalendar('cal-1');
     expect(Calendar.deleteCalendarAsync).toHaveBeenCalledWith('cal-1');
+    expect(confirmed).toBe(true);
   });
 
-  test('never throws when the calendar is already gone', async () => {
+  test('confirms deletion even if deleteCalendarAsync itself threw, as long as the calendar is verified gone', async () => {
+    // expo-calendar's errors don't reliably distinguish "already gone" from
+    // a real failure — the follow-up existence check is the source of truth.
     Calendar.deleteCalendarAsync.mockRejectedValue(new Error('not found'));
-    await expect(deleteAssignmentCalendar('gone')).resolves.toBeUndefined();
+    Calendar.getCalendarsAsync.mockResolvedValue([]);
+    await expect(deleteAssignmentCalendar('gone')).resolves.toBe(true);
   });
 
-  test('no-ops without a calendarId', async () => {
-    await deleteAssignmentCalendar(null);
+  test('reports NOT confirmed when the calendar is still found afterward', async () => {
+    Calendar.getCalendarsAsync.mockResolvedValue([{ id: 'cal-1', title: 'Assignment Planner' }]);
+    const confirmed = await deleteAssignmentCalendar('cal-1');
+    expect(confirmed).toBe(false);
+  });
+
+  test('reports NOT confirmed when existence cannot even be verified', async () => {
+    Calendar.getCalendarsAsync.mockRejectedValue(new Error('permission revoked'));
+    const confirmed = await deleteAssignmentCalendar('cal-1');
+    expect(confirmed).toBe(false);
+  });
+
+  test('no-ops (nothing to confirm) without a calendarId', async () => {
+    const confirmed = await deleteAssignmentCalendar(null);
     expect(Calendar.deleteCalendarAsync).not.toHaveBeenCalled();
+    expect(confirmed).toBe(true);
+  });
+
+  test('no-ops (nothing to confirm) on web', async () => {
+    Platform.OS = 'web';
+    const confirmed = await deleteAssignmentCalendar('cal-1');
+    expect(Calendar.deleteCalendarAsync).not.toHaveBeenCalled();
+    expect(confirmed).toBe(true);
   });
 });

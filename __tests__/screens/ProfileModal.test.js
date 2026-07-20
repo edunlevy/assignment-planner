@@ -325,5 +325,23 @@ describe('ProfileModal', () => {
       await act(async () => { await buttons[2].onPress(); });
       expect(onDisableCalendarSync).toHaveBeenCalledWith(true);
     });
+
+    it('an unconfirmed calendar deletion shows a specific warning instead of the generic failure message', async () => {
+      // Regression test: useCalendarOrchestration's disableSync throws a
+      // distinguishable error (code: CALENDAR_DELETE_UNCONFIRMED) when
+      // deleteEvents=true couldn't be confirmed, so the user isn't told
+      // sync failed entirely when it actually turned off -- only the event
+      // cleanup is in question.
+      const err = new Error('Calendar deletion could not be confirmed');
+      err.code = 'CALENDAR_DELETE_UNCONFIRMED';
+      const onDisableCalendarSync = vi.fn(async () => { throw err; });
+      const screen = render(React.createElement(ProfileModal, makeProps({ calendarSyncEnabled: true, onDisableCalendarSync })));
+      screen.firePressOnText('On');
+      const [, , buttons] = Alert.alert.mock.calls[0];
+      await act(async () => { await buttons[2].onPress(); });
+      expect(screen.getByText(
+        'Sync is off, but some calendar events may not have been removed. Check your calendar app.'
+      )).toBeTruthy();
+    });
   });
 });

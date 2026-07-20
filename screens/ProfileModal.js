@@ -138,8 +138,18 @@ export default function ProfileModal({
     setCalendarBusy(true);
     try {
       await onDisableCalendarSync(deleteEvents);
-    } catch {
-      setCalendarError('Could not turn off calendar sync. Please try again.');
+    } catch (err) {
+      // Sync itself did turn off either way (useCalendarOrchestration sets
+      // syncEnabled=false before attempting the delete) — this specific
+      // error means the "also delete the events" part couldn't be
+      // confirmed, which deserves a more precise message than the generic
+      // fallback so the user knows to go check their calendar app rather
+      // than assume nothing happened at all.
+      setCalendarError(
+        err?.code === 'CALENDAR_DELETE_UNCONFIRMED'
+          ? 'Sync is off, but some calendar events may not have been removed. Check your calendar app.'
+          : 'Could not turn off calendar sync. Please try again.'
+      );
     } finally {
       setCalendarBusy(false);
     }

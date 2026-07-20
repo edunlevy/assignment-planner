@@ -38,7 +38,7 @@ beforeEach(async () => {
   createEventFor.mockResolvedValue('event-new');
   updateEventFor.mockResolvedValue(true);
   deleteEventFor.mockResolvedValue(undefined);
-  deleteAssignmentCalendar.mockResolvedValue(undefined);
+  deleteAssignmentCalendar.mockResolvedValue(true);
 });
 
 describe('useCalendarOrchestration — initial load', () => {
@@ -220,6 +220,31 @@ describe('disableSync', () => {
     await act(async () => { await result.current.disableSync(true); });
 
     expect(deleteAssignmentCalendar).toHaveBeenCalledWith('cal-1');
+  });
+
+  test('deleteEvents=true with unconfirmed deletion: throws a distinguishable error and leaves the event map intact instead of orphaning events', async () => {
+    // Regression test: previously the map was cleared unconditionally
+    // regardless of whether the native delete actually succeeded, so a
+    // failed deletion plus a cleared map would silently orphan those
+    // events — a future re-enable's backfill would see an empty map,
+    // assume nothing was synced, and create a duplicate set alongside the
+    // leftovers. syncEnabled still flips off either way (the user's intent
+    // to stop syncing is honored); only the map-clear is now conditional.
+    await AsyncStorage.setItem(`calendar_sync_enabled_${USER_ID}`, 'true');
+    await AsyncStorage.setItem(`calendar_events_${USER_ID}`, JSON.stringify({ a1: 'event-1' }));
+    deleteAssignmentCalendar.mockResolvedValue(false);
+    const { result } = renderHook(() => useCalendarOrchestration(USER_ID));
+    await flushMicrotasks();
+
+    await act(async () => {
+      await expect(result.current.disableSync(true)).rejects.toMatchObject({
+        code: 'CALENDAR_DELETE_UNCONFIRMED',
+      });
+    });
+
+    expect(result.current.syncEnabled).toBe(false);
+    expect(await AsyncStorage.getItem(`calendar_sync_enabled_${USER_ID}`)).toBe('false');
+    expect(JSON.parse(await AsyncStorage.getItem(`calendar_events_${USER_ID}`))).toEqual({ a1: 'event-1' });
   });
 });
 
