@@ -168,6 +168,37 @@ describe('load effect', () => {
     expect(dbFetch).not.toHaveBeenCalled();
   });
 
+  test('direct account switch (user A -> user B, no intervening null): the previous user\'s assignments do not persist through a failed load for the new user', async () => {
+    // Regression test: a direct switch between two signed-in accounts (no
+    // sign-out in between) is reachable via App.js's deep-link handler,
+    // which calls exchangeCodeForSession/setSession unconditionally for
+    // whatever account a confirmation/recovery link belongs to. Without
+    // clearing state on every userId change (not just to-null), a new user
+    // with no local cache whose fetch then fails would see the PREVIOUS
+    // user's assignments still on screen.
+    const USER_A = 'user-a';
+    const USER_B = 'user-b';
+
+    dbFetch.mockResolvedValueOnce([dbRow({ id: 'a-row', title: 'User A assignment' })]);
+
+    let currentUserId = USER_A;
+    const { result, rerender } = renderHook(() => useAssignments(currentUserId));
+    await flushMicrotasks();
+
+    expect(result.current.assignments).toHaveLength(1);
+    expect(result.current.assignments[0].title).toBe('User A assignment');
+
+    // Switch directly to a different account. User B has no local cache,
+    // and their fetch fails.
+    dbFetch.mockRejectedValueOnce(new Error('offline'));
+    currentUserId = USER_B;
+    rerender();
+    await flushMicrotasks();
+
+    expect(result.current.assignments).toEqual([]);
+    expect(result.current.syncError).toMatch(/Could not reach the server/i);
+  });
+
   test('corrupt cache does not block the network fetch', async () => {
     await AsyncStorage.setItem(`assignments_${USER_ID}`, '{not valid json');
     dbFetch.mockResolvedValue([dbRow({ id: 'fresh', title: 'OK' })]);
