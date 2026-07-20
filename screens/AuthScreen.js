@@ -5,6 +5,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -162,6 +163,10 @@ export default function AuthScreen() {
       style={[styles.container, { paddingTop: insets.top }]}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+      >
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.appName}>Assignment Planner</Text>
@@ -300,6 +305,7 @@ export default function AuthScreen() {
           </>
         )}
       </View>
+      </ScrollView>
     </KeyboardAvoidingView>
   );
 }
@@ -308,8 +314,19 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F0F4FF',
+  },
+  // flexGrow (not flex) so short content (login mode, no keyboard) still
+  // centers vertically, while content taller than the viewport — sign-up's
+  // ranking picker plus everything below it, especially with the keyboard
+  // open — naturally scrolls instead of being clipped. Centering/padding
+  // moved here from `container`, which now only owns layout/background:
+  // a bare View can't scroll no matter what justifyContent does when its
+  // children exceed the screen height.
+  scrollContent: {
+    flexGrow: 1,
     justifyContent: 'center',
     paddingHorizontal: 24,
+    paddingVertical: 24,
   },
   header: {
     alignItems: 'center',
