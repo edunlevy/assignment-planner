@@ -215,6 +215,15 @@ export function useAssignments(userId) {
     // stale or shared link, a shared device). Without this, a new user
     // with no local cache whose fetch then fails would see the PREVIOUS
     // user's assignments still on screen instead of an empty/error state.
+    //
+    // This destructive reset is only safe BECAUSE this effect's dependency
+    // array below is userId-stable — if a future change ever added the
+    // whole `calendar` object (rather than the destructured, userId-only
+    // `calendarReconcileOnLoad`) to the deps, or made a reminders/calendar
+    // callback depend on React state instead of a ref, this effect would
+    // start re-running — and wiping assignments — mid-session on unrelated
+    // renders. Keep that invariant in mind before changing either
+    // dependency array.
     setAssignments([]);
     setSyncError('');
 
