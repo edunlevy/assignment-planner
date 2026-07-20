@@ -41,8 +41,18 @@ export function usePreferences(userId, pendingRanking) {
   useEffect(() => { pendingRankingRef.current = pendingRanking; }, [pendingRanking]);
 
   useEffect(() => {
+    // Reset to the default ranking unconditionally, before the null check —
+    // this effect only re-runs on a genuine userId change, and clearing
+    // only inside the `!userId` branch missed a direct switch from one
+    // signed-in account to another with no intervening null (reachable via
+    // App.js's deep-link handler; see the matching fix + comment in
+    // hooks/useAssignments.js's load effect for the full scenario). Without
+    // this, a new user whose preferences fetch then fails would see the
+    // PREVIOUS user's ranking still applied instead of falling back to the
+    // default.
+    setRanking(DEFAULT_RANKING);
+
     if (!userId) {
-      setRanking(DEFAULT_RANKING);
       setLoaded(false);
       return;
     }

@@ -203,8 +203,31 @@ export function useAssignments(userId) {
   // Load: cache first, network second. Reschedules reminders for
   // incomplete assignments that have no IDs on disk (e.g. after sign-out).
   useEffect(() => {
+    // Reset user-scoped state at the top, unconditionally — this effect
+    // only re-runs when userId itself actually changes (reminders/calendar
+    // are userId-stable, not recreated on unrelated re-renders), so every
+    // run here is a genuine account transition. Clearing only inside the
+    // `!userId` branch below missed a direct switch from one signed-in
+    // account to another (no intervening null) — reachable via App.js's
+    // deep-link handler, which calls exchangeCodeForSession/setSession
+    // unconditionally for whatever account a confirmation/recovery link
+    // belongs to, even while a different account is already signed in (a
+    // stale or shared link, a shared device). Without this, a new user
+    // with no local cache whose fetch then fails would see the PREVIOUS
+    // user's assignments still on screen instead of an empty/error state.
+    //
+    // This destructive reset is only safe BECAUSE this effect's dependency
+    // array below is userId-stable — if a future change ever added the
+    // whole `calendar` object (rather than the destructured, userId-only
+    // `calendarReconcileOnLoad`) to the deps, or made a reminders/calendar
+    // callback depend on React state instead of a ref, this effect would
+    // start re-running — and wiping assignments — mid-session on unrelated
+    // renders. Keep that invariant in mind before changing either
+    // dependency array.
+    setAssignments([]);
+    setSyncError('');
+
     if (!userId) {
-      setAssignments([]);
       setLoaded(false);
       return;
     }
@@ -213,7 +236,6 @@ export function useAssignments(userId) {
     const thisFetch = fetchSeqRef.current;
 
     setLoaded(false);
-    setSyncError('');
 
     (async () => {
       // Show cached data immediately. Isolated try so a corrupt cache

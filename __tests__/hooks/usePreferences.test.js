@@ -89,6 +89,33 @@ describe('usePreferences', () => {
     expect(result.current.loaded).toBe(true);
   });
 
+  test('direct account switch (user A -> user B, no intervening null): the previous user\'s ranking does not persist through a failed load for the new user', async () => {
+    // Regression test: a direct switch between two signed-in accounts (no
+    // sign-out in between) is reachable via App.js's deep-link handler,
+    // which calls exchangeCodeForSession/setSession unconditionally for
+    // whatever account a confirmation/recovery link belongs to. Without
+    // resetting on every userId change (not just to-null), a new user
+    // whose preferences fetch then fails would see the PREVIOUS user's
+    // ranking still applied instead of falling back to the default.
+    const USER_A = 'user-a';
+    const USER_B = 'user-b';
+    const rankingA = ['complexity', 'importance', 'dueDate'];
+    dbFetchPreferences.mockResolvedValueOnce(rankingA);
+
+    let currentUserId = USER_A;
+    const { result, rerender } = renderHook(() => usePreferences(currentUserId, undefined));
+    await flushMicrotasks();
+
+    expect(result.current.ranking).toEqual(rankingA);
+
+    dbFetchPreferences.mockRejectedValueOnce(new Error('network down'));
+    currentUserId = USER_B;
+    rerender();
+    await flushMicrotasks();
+
+    expect(result.current.ranking).toEqual(DEFAULT_RANKING);
+  });
+
   test('savePreferences persists a new ranking and updates state', async () => {
     dbFetchPreferences.mockResolvedValue(DEFAULT_RANKING);
     const updated = ['complexity', 'dueDate', 'importance'];
