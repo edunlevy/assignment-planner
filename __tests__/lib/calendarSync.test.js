@@ -33,6 +33,7 @@ beforeEach(() => {
   Calendar.createEventAsync.mockReset();
   Calendar.updateEventAsync.mockReset();
   Calendar.deleteEventAsync.mockReset();
+  Calendar.getEventAsync.mockReset();
 
   Calendar.getCalendarPermissionsAsync.mockResolvedValue({ status: 'granted' });
   Calendar.requestCalendarPermissionsAsync.mockResolvedValue({ status: 'granted' });
@@ -40,6 +41,10 @@ beforeEach(() => {
   Calendar.createCalendarAsync.mockResolvedValue('new-calendar-id');
   Calendar.getDefaultCalendarSourceAsync.mockResolvedValue({ id: 'source-1', name: 'iCloud' });
   Calendar.createEventAsync.mockResolvedValue('new-event-id');
+  // Default: the event is confirmed gone after a delete (a by-id lookup
+  // throwing is the normal "not found" signal) — matches most tests'
+  // assumption that deletion succeeds.
+  Calendar.getEventAsync.mockRejectedValue(new Error('not found'));
 });
 
 describe('requestCalendarPermission', () => {
@@ -172,25 +177,36 @@ describe('updateEventFor', () => {
 });
 
 describe('deleteEventFor', () => {
-  test('deletes the event', async () => {
-    await deleteEventFor('event-1');
+  test('deletes the event and confirms it via the by-id lookup throwing (not found)', async () => {
+    const confirmed = await deleteEventFor('event-1');
     expect(Calendar.deleteEventAsync).toHaveBeenCalledWith('event-1');
+    expect(confirmed).toBe(true);
   });
 
-  test('never throws when the event is already gone', async () => {
+  test('confirms deletion even if deleteEventAsync itself threw, as long as the follow-up lookup says gone', async () => {
+    // expo-calendar's errors don't reliably distinguish "already gone" from
+    // a real failure — the follow-up lookup is the source of truth.
     Calendar.deleteEventAsync.mockRejectedValue(new Error('not found'));
-    await expect(deleteEventFor('gone')).resolves.toBeUndefined();
+    await expect(deleteEventFor('gone')).resolves.toBe(true);
   });
 
-  test('no-ops without an eventId', async () => {
-    await deleteEventFor(null);
+  test('reports unconfirmed when the event is still found afterward', async () => {
+    Calendar.getEventAsync.mockResolvedValue({ id: 'event-1', title: 'Essay' });
+    const confirmed = await deleteEventFor('event-1');
+    expect(confirmed).toBe(false);
+  });
+
+  test('no-ops (and reports confirmed) without an eventId', async () => {
+    const confirmed = await deleteEventFor(null);
     expect(Calendar.deleteEventAsync).not.toHaveBeenCalled();
+    expect(confirmed).toBe(true);
   });
 
-  test('no-ops on web', async () => {
+  test('no-ops (and reports confirmed) on web', async () => {
     Platform.OS = 'web';
-    await deleteEventFor('event-1');
+    const confirmed = await deleteEventFor('event-1');
     expect(Calendar.deleteEventAsync).not.toHaveBeenCalled();
+    expect(confirmed).toBe(true);
   });
 });
 

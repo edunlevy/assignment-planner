@@ -37,7 +37,7 @@ beforeEach(async () => {
   ensureAssignmentCalendar.mockResolvedValue('cal-1');
   createEventFor.mockResolvedValue('event-new');
   updateEventFor.mockResolvedValue(true);
-  deleteEventFor.mockResolvedValue(undefined);
+  deleteEventFor.mockResolvedValue(true);
   deleteAssignmentCalendar.mockResolvedValue(true);
 });
 
@@ -130,6 +130,24 @@ describe('cancelFor', () => {
     await flushMicrotasks();
     await act(async () => { await result.current.cancelFor('unknown'); });
     expect(deleteEventFor).not.toHaveBeenCalled();
+  });
+
+  test('leaves the map entry in place when deletion could not be confirmed, rather than silently orphaning it', async () => {
+    // deleteEventFor never throws (expo-calendar ambiguity), so cancelFor
+    // can't tell "confirmed gone" from "still there" except via the
+    // returned boolean. Pruning regardless would make the on-disk map lie
+    // about what's actually deleted, with no later pass to ever notice —
+    // unlike reminders, calendar has no orphan-sweep on load.
+    await AsyncStorage.setItem(`calendar_events_${USER_ID}`, JSON.stringify({ a1: 'event-1' }));
+    deleteEventFor.mockResolvedValue(false);
+    const { result } = renderHook(() => useCalendarOrchestration(USER_ID));
+    await flushMicrotasks();
+
+    await act(async () => { await result.current.cancelFor('a1'); });
+
+    expect(deleteEventFor).toHaveBeenCalledWith('event-1');
+    const map = JSON.parse(await AsyncStorage.getItem(`calendar_events_${USER_ID}`));
+    expect(map).toEqual({ a1: 'event-1' });
   });
 });
 
