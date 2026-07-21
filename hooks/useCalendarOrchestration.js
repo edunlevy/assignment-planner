@@ -214,13 +214,24 @@ export function useCalendarOrchestration(userId) {
   // syncEnabled — if an event exists (sync was on when it was created,
   // then turned off), a delete should still go through so it doesn't
   // linger forever after the assignment itself is gone.
+  //
+  // Only prunes the map entry once deletion is CONFIRMED. This is called
+  // from useAssignments' remove/removeSeries with no error UI plumbed
+  // through and no throw here (unlike disableSync, which has ProfileModal
+  // to surface a warning) — a calendar failure must never block deleting
+  // an assignment. But silently pruning on an unconfirmed failure would
+  // orphan the real device event with no record left to ever find it
+  // again (unlike reminders, calendar has no orphan-sweep on load). Best
+  // effort: leave the entry in place so at least the on-disk map doesn't
+  // lie about what's confirmed gone.
   const cancelFor = useCallback(async id => {
     if (!userId) return;
     return withEventMapLock(userId, async () => {
       const map = await loadEventMap(userId);
       const eventId = map[id];
       if (!eventId) return;
-      await deleteEventFor(eventId);
+      const confirmed = await deleteEventFor(eventId);
+      if (!confirmed) return;
       delete map[id];
       await saveEventMap(userId, map);
     });

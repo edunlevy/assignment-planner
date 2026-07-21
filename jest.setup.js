@@ -113,6 +113,7 @@ jest.mock('expo-calendar', () => ({
   createEventAsync: jest.fn(async () => 'event-id'),
   updateEventAsync: jest.fn(async () => undefined),
   deleteEventAsync: jest.fn(async () => undefined),
+  getEventAsync: jest.fn(async () => { throw new Error('not found'); }),
   EntityTypes: { EVENT: 'event' },
   SourceType: { LOCAL: 'local' },
   CalendarAccessLevel: { OWNER: 'owner' },
