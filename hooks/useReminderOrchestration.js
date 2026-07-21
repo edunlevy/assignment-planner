@@ -22,13 +22,34 @@ import {
 // Every operation re-loads the on-disk reminder map (`reminder_ids_${userId}`)
 // before its read-modify-write, treating disk as the single authoritative
 // source — the load effect, AppState effect, realtime handlers, and mutations
-// all touch the whole map concurrently on different ids, so an in-memory cache
-// would clobber. State commits, stale-fetch guards, self-mutation markers,
-// tombstones, and the per-id queue all stay in useAssignments.js.
+// all touch the whole map concurrently on different ids. Re-reading disk only
+// avoids a stale IN-MEMORY cache though; it does nothing to stop two
+// concurrent load-then-save cycles (e.g. reconcileOnLoad and a same-tick
+// scheduleFor for a different id) from interleaving and dropping one call's
+// map entry. State commits, stale-fetch guards, self-mutation markers,
+// tombstones, and the per-id queue all stay in useAssignments.js — but the
+// reminder map itself is per-USER, not per-assignment-id, so useAssignments'
+// per-id enqueueForId queue does NOT serialize these writes against each
+// other. withReminderMapLock below does, mirroring
+// useCalendarOrchestration's withEventMapLock for the identical hazard on
+// its own per-user map.
 //
 // All callbacks are memoized on [userId] and the returned object is memoized,
 // so consumers can safely depend on the whole `reminders` object without
 // re-running effects more often than the underlying userId changes.
+
+// See withEventMapLock in useCalendarOrchestration.js for the full rationale
+// — same lost-update hazard, same per-userId serialization fix, applied here
+// to reminder_ids_${userId} instead of calendar_events_${userId}.
+const reminderMapLocks = new Map();
+function withReminderMapLock(userId, fn) {
+  const prev = reminderMapLocks.get(userId) ?? Promise.resolve();
+  const settled = prev.then(fn, fn);
+  const cleanup = settled.catch(() => {});
+  reminderMapLocks.set(userId, cleanup);
+  return settled;
+}
+
 export function useReminderOrchestration(userId) {
   // Schedule (or refresh) reminders for ONE assignment.
   // - Loads the map, then schedules fresh reminders FIRST — before touching
@@ -55,65 +76,67 @@ export function useReminderOrchestration(userId) {
   // OS notifications so we don't leak reminders for a signed-out user. The
   // user-initiated insert/update paths deliberately omit it — they're expected
   // to run to completion.
-  const scheduleFor = useCallback(async (assignment, shouldCancel) => {
+  const scheduleFor = useCallback((assignment, shouldCancel) => {
     // Already torn down before we touched anything: leave the existing
     // reminders AND the map untouched — they're still consistent with disk.
-    if (shouldCancel && shouldCancel()) return [];
+    if (shouldCancel && shouldCancel()) return Promise.resolve([]);
 
-    const map = await loadReminderMap(userId);
-    const oldEntry = map[assignment.id];
-    const oldIds = reminderEntryIds(oldEntry ?? []);
-    // Pass oldIds.length as reservedSlots: these old reminders are about to
-    // be cancelled once the new schedule is confirmed, so they shouldn't
-    // count against the very iOS budget snapshot this call takes (which is
-    // read BEFORE they're cancelled, since cancelling now happens after —
-    // see scheduleReminders' reservedSlots doc for why).
-    const reminderIds = assignment.status !== 'completed'
-      ? await scheduleReminders(assignment, oldIds.length)
-      : [];
+    return withReminderMapLock(userId, async () => {
+      const map = await loadReminderMap(userId);
+      const oldEntry = map[assignment.id];
+      const oldIds = reminderEntryIds(oldEntry ?? []);
+      // Pass oldIds.length as reservedSlots: these old reminders are about to
+      // be cancelled once the new schedule is confirmed, so they shouldn't
+      // count against the very iOS budget snapshot this call takes (which is
+      // read BEFORE they're cancelled, since cancelling now happens after —
+      // see scheduleReminders' reservedSlots doc for why).
+      const reminderIds = assignment.status !== 'completed'
+        ? await scheduleReminders(assignment, oldIds.length)
+        : [];
 
-    if (shouldCancel && shouldCancel()) {
-      // Torn down mid-flight. The old ids and the map were never touched —
-      // still exactly consistent with what's actually on the OS — so there's
-      // nothing to prune; just undo whatever we just scheduled so it doesn't
-      // leak for a signed-out user.
-      if (reminderIds.length > 0) await cancelReminders(reminderIds).catch(() => {});
-      return [];
-    }
+      if (shouldCancel && shouldCancel()) {
+        // Torn down mid-flight. The old ids and the map were never touched —
+        // still exactly consistent with what's actually on the OS — so there's
+        // nothing to prune; just undo whatever we just scheduled so it doesn't
+        // leak for a signed-out user.
+        if (reminderIds.length > 0) await cancelReminders(reminderIds).catch(() => {});
+        return [];
+      }
 
-    // A non-completed row that HAD working reminders, whose scheduling-
-    // relevant content (dueDate/dueTime/title/course) is UNCHANGED from
-    // what's already on disk, but scheduling just produced nothing — almost
-    // certainly the transient-failure case above, not a legitimate "nothing
-    // to schedule" outcome (every trigger time already passed, or the iOS
-    // pending-cap was hit — either would require something to have changed
-    // since the LAST successful schedule, since neither the due date nor
-    // reservedSlots' own-slot accounting moved). Preserve the still-valid
-    // old reminders rather than silently leaving the assignment with none;
-    // the next successful edit or reconcileOnLoad pass will retry.
-    if (
-      assignment.status !== 'completed' &&
-      reminderIds.length === 0 &&
-      oldIds.length > 0 &&
-      reminderEntrySig(oldEntry) === reminderSig(assignment)
-    ) {
-      return oldIds;
-    }
+      // A non-completed row that HAD working reminders, whose scheduling-
+      // relevant content (dueDate/dueTime/title/course) is UNCHANGED from
+      // what's already on disk, but scheduling just produced nothing — almost
+      // certainly the transient-failure case above, not a legitimate "nothing
+      // to schedule" outcome (every trigger time already passed, or the iOS
+      // pending-cap was hit — either would require something to have changed
+      // since the LAST successful schedule, since neither the due date nor
+      // reservedSlots' own-slot accounting moved). Preserve the still-valid
+      // old reminders rather than silently leaving the assignment with none;
+      // the next successful edit or reconcileOnLoad pass will retry.
+      if (
+        assignment.status !== 'completed' &&
+        reminderIds.length === 0 &&
+        oldIds.length > 0 &&
+        reminderEntrySig(oldEntry) === reminderSig(assignment)
+      ) {
+        return oldIds;
+      }
 
-    await cancelReminders(oldIds);
-    if (reminderIds.length > 0) {
-      map[assignment.id] = makeReminderEntry(reminderIds, reminderSig(assignment));
-    } else {
-      delete map[assignment.id];
-    }
-    await saveReminderMap(userId, map);
-    return reminderIds;
+      await cancelReminders(oldIds);
+      if (reminderIds.length > 0) {
+        map[assignment.id] = makeReminderEntry(reminderIds, reminderSig(assignment));
+      } else {
+        delete map[assignment.id];
+      }
+      await saveReminderMap(userId, map);
+      return reminderIds;
+    });
   }, [userId]);
 
   // Schedule reminders for MANY fresh assignments against one shared iOS slot
   // budget. No pre-cancel (these are brand-new inserts). Returns a list of id
   // arrays in input order. Used by insertMany.
-  const scheduleBatchFor = useCallback(async assignments => {
+  const scheduleBatchFor = useCallback(assignments => withReminderMapLock(userId, async () => {
     const reminderIdsList = await scheduleRemindersBatch(assignments);
     const map = await loadReminderMap(userId);
     assignments.forEach((a, i) => {
@@ -122,17 +145,17 @@ export function useReminderOrchestration(userId) {
     });
     await saveReminderMap(userId, map);
     return reminderIdsList;
-  }, [userId]);
+  }), [userId]);
 
   // Cancel all reminders for one id and prune its map entry. Reads the
   // on-disk ids (canonical source). Used by remove and reconcileRemoteDelete.
-  const cancelFor = useCallback(async id => {
+  const cancelFor = useCallback(id => withReminderMapLock(userId, async () => {
     const oldIds = await loadReminderIdsFor(userId, id);
     await cancelReminders(oldIds);
     const map = await loadReminderMap(userId);
     delete map[id];
     await saveReminderMap(userId, map);
-  }, [userId]);
+  }), [userId]);
 
   // Post-fetch reconciliation (load effect Block 2), moved here verbatim.
   //   Phase A — cancel reminders for rows deleted remotely or now completed,
@@ -145,9 +168,17 @@ export function useReminderOrchestration(userId) {
   // that is checked at the SAME points. On cancel we return early; the caller
   // won't use the return value in that case. Returns the final withReminders
   // array so the caller does setAssignments + cache write under its own guard.
-  const reconcileOnLoad = useCallback(async (merged, reminderMap, shouldCancel) => {
+  const reconcileOnLoad = useCallback((merged, reminderMap, shouldCancel) => withReminderMapLock(userId, async () => {
     // Phase A — stale-reminder cleanup (no OS permission required).
-    const updatedMap = { ...reminderMap };
+    // Re-load the map from disk now that we hold the lock, rather than
+    // trusting the `reminderMap` snapshot the caller read before Block 2
+    // even started (see useAssignments.js) — by the time our turn in the
+    // lock queue runs, a concurrent scheduleFor/cancelFor for a different
+    // id may have already landed a write. Using the stale snapshot as our
+    // mutation base would silently drop that write when we save below —
+    // the exact lost-update race this lock exists to prevent.
+    const onDiskMap = await loadReminderMap(userId);
+    const updatedMap = { ...onDiskMap };
     const freshIds = new Set(merged.map(a => a.id));
 
     // 1. Rows in the map but absent from the fresh fetch → deleted remotely.
@@ -177,7 +208,7 @@ export function useReminderOrchestration(userId) {
 
     // Flush cleanup to disk now so a crash between here and Phase B
     // doesn't leave stale IDs in the map.
-    if (!reminderMapsEqual(updatedMap, reminderMap)) {
+    if (!reminderMapsEqual(updatedMap, onDiskMap)) {
       await saveReminderMap(userId, updatedMap);
     }
     if (shouldCancel()) return;
@@ -247,7 +278,7 @@ export function useReminderOrchestration(userId) {
     });
     if (shouldCancel()) return;
 
-    if (!reminderMapsEqual(updatedMap, reminderMap)) {
+    if (!reminderMapsEqual(updatedMap, onDiskMap)) {
       await saveReminderMap(userId, updatedMap);
     }
 
@@ -255,7 +286,7 @@ export function useReminderOrchestration(userId) {
     await storeDeviceTimezone(userId);
 
     return withReminders;
-  }, [userId]);
+  }), [userId]);
 
   // AppState TZ-change reschedule. Cancels every incomplete row's on-disk
   // reminders, reschedules against one shared iOS budget, updates+saves the
@@ -264,7 +295,7 @@ export function useReminderOrchestration(userId) {
   // new ids so the caller does commitLocal. The caller owns the
   // detectTimezoneChanged check, the no-incomplete branch, the final
   // commitLocal, and the closing storeDeviceTimezone.
-  const rescheduleAll = useCallback(async (incomplete, shouldCancel) => {
+  const rescheduleAll = useCallback((incomplete, shouldCancel) => withReminderMapLock(userId, async () => {
     // Cancel all currently-scheduled reminders for incomplete rows.
     // Read the on-disk map as the canonical source.
     const map = await loadReminderMap(userId);
@@ -321,7 +352,7 @@ export function useReminderOrchestration(userId) {
 
     // Return the per-id new ids so the caller reflects them into state.
     return new Map(incomplete.map((a, i) => [a.id, newIdsList[i] ?? []]));
-  }, [userId]);
+  }), [userId]);
 
   return useMemo(() => ({
     scheduleFor,

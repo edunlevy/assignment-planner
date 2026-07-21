@@ -100,13 +100,20 @@ export default function ProfileModal({
       }
       if (userId) {
         await saveReminderMap(userId, {});
-        // Remove the assignment cache and ranking preference cache so
-        // deleted data can't resurface if session cleanup misbehaves after
-        // the account is gone. The server-side preferences row is deleted
-        // by delete_user() itself (see the migration); this is only the
-        // local AsyncStorage mirror usePreferences.js keeps.
+        // Remove every remaining per-user local-only cache so deleted data
+        // can't resurface if session cleanup misbehaves after the account
+        // is gone. The server-side preferences row is deleted by
+        // delete_user() itself (see the migration); these are all local
+        // AsyncStorage mirrors: assignments_/ranking_ (usePreferences.js),
+        // and the calendar-sync flag/map + stored device TZ, which
+        // onDisableCalendarSync above only clears/flips rather than
+        // removing (it may also never have run at all, if sync was never
+        // enabled for this account).
         await AsyncStorage.removeItem(`assignments_${userId}`);
         await AsyncStorage.removeItem(`ranking_${userId}`);
+        await AsyncStorage.removeItem(`calendar_sync_enabled_${userId}`);
+        await AsyncStorage.removeItem(`calendar_events_${userId}`);
+        await AsyncStorage.removeItem(`device_tz_${userId}`);
       }
       // Best-effort Google SDK sign-out for the same reason as handleSignOut.
       await GoogleSignin.signOut().catch(() => {});
