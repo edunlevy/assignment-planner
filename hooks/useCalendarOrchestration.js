@@ -250,7 +250,6 @@ export function useCalendarOrchestration(userId) {
 
   // Turn sync off. `deleteEvents` controls whether the dedicated calendar
   // (and everything in it) is removed, or left behind for the user to keep.
-  // Either way the local event map is cleared — a re-enable starts fresh.
   const disableSync = useCallback(async deleteEvents => {
     if (!userId) return;
     setSyncEnabled(false);
@@ -258,21 +257,29 @@ export function useCalendarOrchestration(userId) {
     // lock) — it's the authoritative signal isSyncEnabledOnDisk reads for
     // every other locked operation. A backfill or scheduleFor that hasn't
     // yet reached its own check sees 'false' the moment it does and bails
-    // before touching the calendar; one already past its check and mid-way
-    // through native calls when this write lands isn't retroactively
-    // stopped, but see backfillMissingEvents/scheduleFor's comments for why
-    // that narrow window doesn't actually leak (deleteEvents=true deletes
-    // the whole calendar regardless of exactly what was in it moments
-    // before, and deleteEvents=false's "extra kept event" isn't a
-    // correctness problem given the user chose to keep events anyway).
-    // This function's own clear always runs (now or once its lock turn
-    // arrives), so the map ends up empty either way.
+    // before touching the calendar.
     await AsyncStorage.setItem(enabledKey(userId), 'false');
     return withEventMapLock(userId, async () => {
       if (deleteEvents) {
         const calendarId = await ensureAssignmentCalendar();
-        await deleteAssignmentCalendar(calendarId);
+        const confirmed = await deleteAssignmentCalendar(calendarId);
+        if (!confirmed) {
+          // Deletion could not be confirmed — leave the event map intact
+          // rather than forgetting about events that might still be on
+          // the device. Clearing it here regardless of outcome (the
+          // previous behavior) meant a failed delete plus a cleared map
+          // would silently orphan those events: a future re-enable's
+          // backfill sees an empty map, assumes nothing is synced, and
+          // creates a whole new duplicate set alongside the leftovers.
+          // Throwing lets the caller (ProfileModal) surface this instead
+          // of reporting success — see its calendarError handling.
+          const err = new Error('Calendar deletion could not be confirmed');
+          err.code = 'CALENDAR_DELETE_UNCONFIRMED';
+          throw err;
+        }
       }
+      // Either deleteEvents was false (nothing to confirm), or it was true
+      // and confirmed — safe to clear in both cases.
       await saveEventMap(userId, {});
     });
   }, [userId]);
