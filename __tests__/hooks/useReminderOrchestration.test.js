@@ -563,3 +563,75 @@ describe('rescheduleAll', () => {
     expect(await readMap()).toEqual({ r2: { ids: ['r2-24h'], sig: 's' } });
   });
 });
+
+// ===========================================================================
+// reminder map concurrency
+// ===========================================================================
+// Regression tests for a lost-update race: without serializing the shared
+// reminder_ids_<userId> AsyncStorage key across all five orchestration
+// methods (withReminderMapLock), two concurrent read-modify-write sequences
+// touching DIFFERENT assignment ids — which useAssignments' per-id
+// enqueueForId queue does nothing to prevent, since the underlying map is
+// per-user, not per-id — could each read the map before the other's write
+// landed, silently dropping one call's entry. Mirrors the equivalent
+// useCalendarOrchestration concurrency tests for its own per-user map.
+describe('reminder map concurrency', () => {
+  test('concurrent scheduleFor calls for different assignments do not clobber each other\'s map entries', async () => {
+    let counter = 0;
+    Notifications.scheduleNotificationAsync.mockImplementation(async () => `notif-${counter++}`);
+    const api = mount();
+    await flushMicrotasks();
+
+    const a1 = row({ id: 'a1' });
+    const a2 = row({ id: 'a2' });
+    const a3 = row({ id: 'a3' });
+
+    await Promise.all([
+      api.current.scheduleFor(a1),
+      api.current.scheduleFor(a2),
+      api.current.scheduleFor(a3),
+    ]);
+
+    const map = await readMap();
+    expect(Object.keys(map).sort()).toEqual(['a1', 'a2', 'a3']);
+    expect(map.a1.sig).toBe(reminderSig(a1));
+    expect(map.a2.sig).toBe(reminderSig(a2));
+    expect(map.a3.sig).toBe(reminderSig(a3));
+  });
+
+  test('reconcileOnLoad reads the map fresh under the lock instead of trusting a stale caller-supplied snapshot', async () => {
+    // reconcileOnLoad's caller (useAssignments.js) reads its `reminderMap`
+    // snapshot before Block 2 even starts — well before reconcileOnLoad
+    // actually gets its turn in the lock queue. If reconcileOnLoad trusted
+    // that stale (empty) snapshot as its mutation base instead of re-reading
+    // disk once the lock is acquired, it would wrongly conclude a1 has no
+    // existing reminders, needlessly reschedule it (duplicate OS
+    // notifications) and overwrite a1's just-written map entry when it
+    // saves — orphaning the real ids scheduleFor produced. merged includes
+    // both ids (not just a2) so Phase A's "absent from merged -> deleted
+    // remotely" cleanup doesn't confuse this with that separate case.
+    let counter = 0;
+    Notifications.scheduleNotificationAsync.mockImplementation(async () => `notif-${counter++}`);
+    const api = mount();
+    await flushMicrotasks();
+
+    const a1 = row({ id: 'a1' });
+    const a2 = row({ id: 'a2' });
+    const staleSnapshot = {}; // what the caller "read" before either call started
+
+    // scheduleFor(a1) is queued into the lock first, so it lands before
+    // reconcileOnLoad's turn runs, even though both start "concurrently".
+    await Promise.all([
+      api.current.scheduleFor(a1),
+      api.current.reconcileOnLoad([a1, a2], staleSnapshot, () => false),
+    ]);
+
+    // Exactly 4 schedule calls total (2 for a1 via scheduleFor, 2 for a2 via
+    // reconcileOnLoad's Phase B) — a buggy stale-snapshot base would add 2
+    // more by needlessly rescheduling a1 too.
+    expect(Notifications.scheduleNotificationAsync).toHaveBeenCalledTimes(4);
+    const map = await readMap();
+    expect(map.a1).toEqual({ ids: ['notif-0', 'notif-1'], sig: reminderSig(a1) });
+    expect(map.a2).toEqual({ ids: ['notif-2', 'notif-3'], sig: reminderSig(a2) });
+  });
+});

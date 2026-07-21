@@ -105,6 +105,13 @@ describe('ProfileModal', () => {
     // wiped too — the server-side row is deleted by delete_user() itself,
     // but nothing else clears this AsyncStorage mirror.
     expect(AsyncStorage.removeItem).toHaveBeenCalledWith('ranking_user-123');
+    // Calendar-sync flag/map and the stored device TZ are also per-user
+    // local-only caches with no other cleanup path — onDisableCalendarSync
+    // (not called here, since sync was never on) only clears/flips them,
+    // it never removes the keys outright.
+    expect(AsyncStorage.removeItem).toHaveBeenCalledWith('calendar_sync_enabled_user-123');
+    expect(AsyncStorage.removeItem).toHaveBeenCalledWith('calendar_events_user-123');
+    expect(AsyncStorage.removeItem).toHaveBeenCalledWith('device_tz_user-123');
     expect(GoogleSignin.signOut).toHaveBeenCalledOnce();
     expect(supabase.auth.signOut).toHaveBeenCalledOnce();
     expect(onClose).toHaveBeenCalledOnce();
