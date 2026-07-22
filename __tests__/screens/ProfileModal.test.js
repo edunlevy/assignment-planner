@@ -153,7 +153,7 @@ describe('ProfileModal', () => {
     expect(onDisableCalendarSync).toHaveBeenCalledWith(true);
   });
 
-  it('a calendar-sync cleanup failure during delete does not block the rest of local cleanup', async () => {
+  it('a calendar-sync cleanup failure during delete surfaces a dismissible warning without blocking the rest of local cleanup', async () => {
     const onClose = vi.fn();
     const onDisableCalendarSync = vi.fn(async () => { throw new Error('calendar API down'); });
     const screen = render(React.createElement(ProfileModal, makeProps({
@@ -162,10 +162,22 @@ describe('ProfileModal', () => {
       onDisableCalendarSync,
     })));
     screen.firePressOnText('Delete Account');
-    const [, , buttons] = Alert.alert.mock.calls[0];
-    await act(async () => { await buttons[1].onPress(); });
-    // Account deletion already succeeded server-side by this point — a
-    // best-effort calendar failure must not strand the user mid-flow.
+    const [, , confirmButtons] = Alert.alert.mock.calls[0];
+    act(() => { confirmButtons[1].onPress(); });
+    await screen.flush();
+
+    // handleDelete is now paused awaiting the dismissible warning — account
+    // deletion already succeeded server-side, so a best-effort calendar
+    // failure must not strand the user, but it must not be silently
+    // swallowed either (the whole point of this regression test).
+    expect(Alert.alert).toHaveBeenCalledTimes(2);
+    const [title, message, warningButtons] = Alert.alert.mock.calls[1];
+    expect(title).toBe('Account deleted');
+    expect(message).toMatch(/calendar/i);
+    expect(supabase.auth.signOut).not.toHaveBeenCalled();
+
+    await act(async () => { warningButtons[0].onPress(); });
+
     expect(saveReminderMap).toHaveBeenCalledWith('user-123', {});
     expect(supabase.auth.signOut).toHaveBeenCalledOnce();
     expect(onClose).toHaveBeenCalledOnce();
