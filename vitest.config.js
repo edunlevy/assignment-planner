@@ -19,29 +19,17 @@
 
 import { defineConfig } from 'vitest/config';
 import { createRequire } from 'module';
-import path from 'path';
-import fs from 'fs';
 
 // createRequire is cheap (no module loading) — safe at top level.
 const _require = createRequire(import.meta.url);
 
-// JSX-containing directories. hooks/ is intentionally excluded — hooks are
-// plain JS with no JSX syntax.
+// JSX-containing source files: components/*.js, screens/*.js, App.js.
+// hooks/ and lib/ are excluded — they are plain JS with no JSX syntax.
+// `*.styles.js` sit under components/ but hold only StyleSheet objects (no
+// JSX), so they're excluded to avoid running babel on them needlessly.
 const JSX_FILE_RE = /\/(components|screens)\/[^/]+\.js$|\/App\.js$/;
-
-// Strip the '\0jsx:' prefix (5 chars) and '.jsx' suffix (4 chars).
-function realPath(id) {
-  return id.slice(5, -4);
-}
-
-function resolveToAbs(source, importer) {
-  // Importer may be a virtual ID; strip prefix to get the real file path.
-  const base = importer.startsWith('\0jsx:') ? realPath(importer) : importer;
-  const abs = path.resolve(path.dirname(base), source);
-  if (abs.endsWith('.js') && fs.existsSync(abs)) return abs;
-  const withJs = abs + '.js';
-  if (fs.existsSync(withJs)) return withJs;
-  return null;
+function isJsxFile(file) {
+  return JSX_FILE_RE.test(file) && !file.endsWith('.styles.js');
 }
 
 // @babel/core is loaded lazily — only when the first JSX file is encountered,
@@ -59,52 +47,45 @@ function transformJSX(code, filename) {
           plugins: [[plugin, { runtime: 'automatic' }]],
           configFile: false,
           babelrc: false,
-          sourceMaps: false,
+          // Emit a source map so the v8 coverage provider can attribute
+          // executed, JSX-transformed code back to the ORIGINAL .js source.
+          // Without this the previous plugin left UI files un-remappable, which
+          // is why components/screens/App.js could not be line-counted at all.
+          sourceMaps: true,
           ast: false,
         });
-        return r ? r.code : src;
-      } catch { return src; }
+        if (!r) return null;
+        return { code: r.code, map: r.map };
+      } catch {
+        return null;
+      }
     };
   }
   return _transformJSX(code, filename);
 }
 
-// Vite plugin: redirect React Native .js component files to virtual .jsx IDs
-// so that the JSX content is transformed (via babel, lazily loaded) before
-// vite:import-analysis sees it. Without this, import-analysis fails because
-// it expects plain JS in .js files.
+// Vite plugin: strip JSX from React Native .js component/screen files (and
+// App.js) IN PLACE, keyed on the file's REAL id — no virtual `\0jsx:` module.
+//
+// Why a real-id `transform` hook (not the old resolveId/load virtual-ID trick):
+//   The v8 coverage provider attributes execution by real file path + source
+//   map. The old plugin served the transformed code from a virtual `\0jsx:`
+//   id with no source map, so the coverage provider — which reads the REAL
+//   files from disk — saw raw, unparseable JSX and could not count UI files
+//   at all (they ran but were invisible to coverage). Transforming under the
+//   real id and emitting a source map lets v8 map executed code straight back
+//   to the original .js, so components/, screens/, and App.js are now counted.
+//   `enforce: 'pre'` runs this before vite's esbuild/import-analysis, so those
+//   stages only ever see the emitted plain JS.
 const rnJsxPlugin = {
   name: 'rn-jsx-in-js',
   enforce: 'pre',
-  resolveId(source, importer) {
-    if (!importer || source.startsWith('\0') || path.isAbsolute(source)) return null;
-
-    const abs = resolveToAbs(source, importer);
-    if (!abs || abs.includes('node_modules')) return null;
-
-    if (JSX_FILE_RE.test(abs)) {
-      // Redirect JSX file to a virtual .jsx ID.
-      return '\0jsx:' + abs + '.jsx';
-    }
-
-    if (importer.startsWith('\0jsx:')) {
-      // A virtual module is importing a non-JSX file (e.g. a lib utility).
-      // Vite can't resolve relative imports from virtual IDs, so return the
-      // real absolute path so Vite's normal load pipeline handles it.
-      return abs;
-    }
-
-    return null;
-  },
-  load(id) {
-    if (!id.startsWith('\0jsx:')) return null;
-    const file = realPath(id);
-    try {
-      const src = fs.readFileSync(file, 'utf-8');
-      // Transform JSX here (before vite:import-analysis) so the plugin
-      // returns plain JS that the analysis plugin can parse correctly.
-      return { code: transformJSX(src, file) };
-    } catch { return null; }
+  transform(code, id) {
+    // id may carry a query suffix (?v=...); match on the path part only.
+    const file = id.split('?')[0];
+    if (file.includes('node_modules')) return null;
+    if (!isJsxFile(file)) return null;
+    return transformJSX(code, file);
   },
 };
 
@@ -131,41 +112,38 @@ export default defineConfig({
 
     // Coverage (used by `npm run test:ci` = `vitest run --coverage`).
     //
-    // WHY include is restricted to lib/ + hooks/:
-    //   The v8 provider's getCoverageMapForUncoveredFiles() reads every file
-    //   matched by `coverage.include` and re-parses it with rolldown to build
-    //   zero-coverage maps. With the default include (`**`) on Node 22+ under
-    //   singleFork this scan hangs at ~0% CPU. Two compounding causes:
-    //     1. The JSX component/screen .js files (and App.js) are NOT valid
-    //        plain JS — rolldown can't parse the raw JSX, so they can't be
-    //        instrumented via v8 anyway (the rnJsxPlugin's virtual `\0jsx:`
-    //        transform is invisible to the coverage provider, which reads the
-    //        real files from disk). They report 0% / unparseable.
-    //     2. The broad uncovered-file scan walks marketing/, web-redirect/,
-    //        scripts/, db/, etc. and stalls.
-    //   Restricting include to the pure-JS source (lib/, hooks/) avoids both:
-    //   the scan stays small and every included file is parseable. plain
-    //   `npm test` (no --coverage) is unaffected and stays sub-2s.
-    //
-    //   components/, screens/, and App.js are therefore NOT gated by v8
-    //   coverage here. Their tests still run (and pass); they're just not
-    //   line-counted. Re-enabling them needs a coverage-aware JSX transform
-    //   (Phase 2 work — see stabilization plan).
+    // include now covers the WHOLE app — lib/, hooks/, components/, screens/,
+    // and App.js. UI files became line-countable once the rnJsxPlugin above
+    // switched to a real-id transform that emits a source map (see its comment):
+    // the v8 provider can finally attribute executed JSX back to the original
+    // .js. The historical ~0% CPU hang doesn't recur because the v8
+    // uncovered-file scan runs each included file back through the Vite
+    // transform pipeline (so rnJsxPlugin strips its JSX) BEFORE parsing it —
+    // even a UI file that no test imports parses fine. The exclude list keeps
+    // the scan off non-app trees (marketing/, web-redirect/, scripts/, db/) and
+    // presentational style-only files.
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],
-      include: ['lib/**/*.js', 'hooks/**/*.js'],
-      exclude: ['**/__tests__/**', '**/*.test.js'],
-      // Thresholds set at/just below current actuals (lib+hooks, 2026-06):
-      //   lines 93.19 / statements 90.07 / functions 89.20 / branches 84.09.
-      // Margins leave room for noise while still catching real regressions.
-      // branches is set lowest because hooks/useAssignments.js sits at ~73%
-      // branch — a known gap Phase 2 will close.
+      include: ['lib/**/*.js', 'hooks/**/*.js', 'components/**/*.js', 'screens/**/*.js', 'App.js'],
+      exclude: ['**/__tests__/**', '**/*.test.js', '**/*.styles.js'],
+      // Thresholds are a whole-app floor plus per-area floors, all set
+      // just-below current actuals (2026-07, with UI now counted):
+      //   all files  — lines 90.35 / statements 88.30 / functions 82.63 / branches 82.09
+      //   lib/**     — lines 93.98 / branches 91.36
+      //   hooks/**   — lines 96.75 / branches 80.11 (useAssignments branch is the low point)
+      // The whole-app number is LOWER than the old lib+hooks-only figure not
+      // because coverage regressed but because the denominator now includes the
+      // UI and App.js (~51% lines) — a known Phase-1 gap the flow/UI tests will
+      // ratchet up. The lib/ and hooks/ per-globs preserve the mature core's
+      // high bar so it can't silently regress while UI coverage is climbing.
       thresholds: {
-        lines: 90,
-        statements: 88,
-        functions: 86,
+        lines: 89,
+        statements: 87,
+        functions: 81,
         branches: 80,
+        'lib/**': { lines: 92, statements: 91, functions: 92, branches: 88 },
+        'hooks/**': { lines: 95, statements: 91, functions: 88, branches: 79 },
       },
     },
   },
