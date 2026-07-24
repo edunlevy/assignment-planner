@@ -112,8 +112,18 @@ export default function ProfileModal({
             // eslint-disable-next-line no-alert
             window.alert(message);
           } else {
+            // onDismiss covers Android's non-button dismissal (e.g. the
+            // Activity recreating on rotation while the alert is up) —
+            // without it, that path never calls onPress and this promise
+            // (and the rest of account-deletion cleanup + sign-out) would
+            // hang forever.
             await new Promise(resolve => {
-              Alert.alert('Account deleted', message, [{ text: 'OK', onPress: resolve }]);
+              Alert.alert(
+                'Account deleted',
+                message,
+                [{ text: 'OK', onPress: resolve }],
+                { onDismiss: resolve },
+              );
             });
           }
         }
