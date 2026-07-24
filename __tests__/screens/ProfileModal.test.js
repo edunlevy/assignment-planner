@@ -153,7 +153,7 @@ describe('ProfileModal', () => {
     expect(onDisableCalendarSync).toHaveBeenCalledWith(true);
   });
 
-  it('a calendar-sync cleanup failure during delete does not block the rest of local cleanup', async () => {
+  it('a calendar-sync cleanup failure during delete surfaces a dismissible warning without blocking the rest of local cleanup', async () => {
     const onClose = vi.fn();
     const onDisableCalendarSync = vi.fn(async () => { throw new Error('calendar API down'); });
     const screen = render(React.createElement(ProfileModal, makeProps({
@@ -162,13 +162,49 @@ describe('ProfileModal', () => {
       onDisableCalendarSync,
     })));
     screen.firePressOnText('Delete Account');
-    const [, , buttons] = Alert.alert.mock.calls[0];
-    await act(async () => { await buttons[1].onPress(); });
-    // Account deletion already succeeded server-side by this point — a
-    // best-effort calendar failure must not strand the user mid-flow.
+    const [, , confirmButtons] = Alert.alert.mock.calls[0];
+    act(() => { confirmButtons[1].onPress(); });
+    await screen.flush();
+
+    // handleDelete is now paused awaiting the dismissible warning — account
+    // deletion already succeeded server-side, so a best-effort calendar
+    // failure must not strand the user, but it must not be silently
+    // swallowed either (the whole point of this regression test).
+    expect(Alert.alert).toHaveBeenCalledTimes(2);
+    const [title, message, warningButtons] = Alert.alert.mock.calls[1];
+    expect(title).toBe('Account deleted');
+    expect(message).toMatch(/calendar/i);
+    expect(supabase.auth.signOut).not.toHaveBeenCalled();
+
+    await act(async () => { warningButtons[0].onPress(); });
+
     expect(saveReminderMap).toHaveBeenCalledWith('user-123', {});
     expect(supabase.auth.signOut).toHaveBeenCalledOnce();
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('shows the specific CALENDAR_DELETE_UNCONFIRMED wording during delete, mirroring the standalone disable-sync flow', async () => {
+    const err = new Error('unconfirmed');
+    err.code = 'CALENDAR_DELETE_UNCONFIRMED';
+    const onDisableCalendarSync = vi.fn(async () => { throw err; });
+    const screen = render(React.createElement(ProfileModal, makeProps({
+      calendarSyncEnabled: true,
+      onDisableCalendarSync,
+    })));
+    screen.firePressOnText('Delete Account');
+    const [, , confirmButtons] = Alert.alert.mock.calls[0];
+    act(() => { confirmButtons[1].onPress(); });
+    await screen.flush();
+
+    const [, message, , options] = Alert.alert.mock.calls[1];
+    expect(message).toMatch(/may still be on your device/i);
+    // Android can dismiss an alert without a button tap (e.g. the Activity
+    // recreating on rotation while it's showing) — onDismiss must also
+    // resolve the pause, or cleanup/sign-out would hang forever.
+    expect(options.onDismiss).toBeTypeOf('function');
+
+    await act(async () => { options.onDismiss(); });
+    expect(supabase.auth.signOut).toHaveBeenCalledOnce();
   });
 
   it('Delete Account is disabled while a calendar-sync toggle is in flight, closing a race with account deletion', async () => {

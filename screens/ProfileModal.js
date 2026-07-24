@@ -95,8 +95,38 @@ export default function ProfileModal({
         // "permanently erases... everything" promise in confirmDelete's
         // message above. Best-effort: account deletion already succeeded
         // server-side by this point, so a calendar API failure here must
-        // not block the rest of local cleanup or leave the user stuck.
-        await onDisableCalendarSync(true).catch(() => {});
+        // not block or fail the rest of local cleanup — but silently
+        // swallowing it left the user with zero indication that a stray
+        // "Assignment Planner" calendar might remain on their device with
+        // no future way (the account is gone) to ever clean it up. Show a
+        // blocking, dismiss-only notice instead — mirrors the specific
+        // CALENDAR_DELETE_UNCONFIRMED message in handleDisableCalendarSync
+        // below — then continue the deletion regardless of the outcome.
+        try {
+          await onDisableCalendarSync(true);
+        } catch (err) {
+          const message = err?.code === 'CALENDAR_DELETE_UNCONFIRMED'
+            ? 'Your account was deleted, but some calendar events created by this app may still be on your device. You can remove the "Assignment Planner" calendar manually if needed.'
+            : 'Your account was deleted, but calendar cleanup could not be completed.';
+          if (Platform.OS === 'web') {
+            // eslint-disable-next-line no-alert
+            window.alert(message);
+          } else {
+            // onDismiss covers Android's non-button dismissal (e.g. the
+            // Activity recreating on rotation while the alert is up) —
+            // without it, that path never calls onPress and this promise
+            // (and the rest of account-deletion cleanup + sign-out) would
+            // hang forever.
+            await new Promise(resolve => {
+              Alert.alert(
+                'Account deleted',
+                message,
+                [{ text: 'OK', onPress: resolve }],
+                { onDismiss: resolve },
+              );
+            });
+          }
+        }
       }
       if (userId) {
         await saveReminderMap(userId, {});
