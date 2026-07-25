@@ -143,6 +143,65 @@ describe('AssignmentFormModal — create mode', () => {
     screen.firePressOnText('Cancel');
     expect(onClose).toHaveBeenCalledOnce();
   });
+
+  // Fill the two required text fields and pick a due date so the form validates.
+  function fillRequired(screen, { title = 'Essay', course = 'ENGL 200' } = {}) {
+    fillInput(screen.toJSON(), 'e.g. Problem Set 4', title);
+    fillInput(screen.toJSON(), 'e.g. MATH 201', course);
+    screen.firePressOnText('Tap to choose a date');
+    act(() => { screen.getAllByType('DateTimePicker')[0].props.onChange({}, new Date(2026, 6, 1)); });
+    screen.firePressOnText('Done');
+  }
+
+  it('forwards the selected importance and complexity to onCreate', async () => {
+    const onCreate = vi.fn(async () => {});
+    const screen = render(React.createElement(AssignmentFormModal, makeProps({ onCreate })));
+    await screen.flush();
+    fillRequired(screen);
+    screen.firePressOnText('5');    // importance button
+    screen.firePressOnText('Long'); // complexity button
+    screen.firePressOnText('Save Assignment');
+    await screen.flush();
+    expect(onCreate).toHaveBeenCalledOnce();
+    const [args] = onCreate.mock.calls[0];
+    expect(args.importance).toBe(5);
+    expect(args.complexity).toBe('long');
+  });
+
+  it('forwards a chosen due time to onCreate', async () => {
+    const onCreate = vi.fn(async () => {});
+    const screen = render(React.createElement(AssignmentFormModal, makeProps({ onCreate })));
+    await screen.flush();
+    fillRequired(screen);
+    screen.firePressOnText('Tap to choose a time');
+    act(() => { screen.getAllByType('DateTimePicker')[0].props.onChange({ type: 'set' }, new Date(2026, 0, 1, 14, 30)); });
+    screen.firePressOnText('Save Assignment');
+    await screen.flush();
+    expect(onCreate).toHaveBeenCalledOnce();
+    expect(onCreate.mock.calls[0][0].dueTime).toBe('14:30');
+  });
+
+  it('creates a recurring series with the chosen interval and end date', async () => {
+    const onCreate = vi.fn(async () => {});
+    const onCreateRecurring = vi.fn(async () => {});
+    const screen = render(React.createElement(AssignmentFormModal, makeProps({ onCreate, onCreateRecurring })));
+    await screen.flush();
+    fillRequired(screen, { title: 'Weekly Quiz', course: 'CHEM 101' });
+    // Turn on recurring, choose the biweekly interval, set an end date.
+    screen.firePressOnText('Repeat until…');
+    screen.firePressOnText('Every 2 weeks');
+    screen.firePressOnText('Tap to choose an end date');
+    act(() => { screen.getAllByType('DateTimePicker')[0].props.onChange({}, new Date(2026, 7, 1)); });
+    screen.firePressOnText('Done');
+    screen.firePressOnText('Save Assignment');
+    await screen.flush();
+    expect(onCreateRecurring).toHaveBeenCalledOnce();
+    // Recurring branch is exclusive — the one-off create path must not fire.
+    expect(onCreate).not.toHaveBeenCalled();
+    const [args] = onCreateRecurring.mock.calls[0];
+    expect(args.repeatInterval).toBe(2);
+    expect(args.repeatUntil).toBe('2026-08-01');
+  });
 });
 
 describe('AssignmentFormModal — edit mode', () => {
@@ -262,6 +321,19 @@ describe('AssignmentFormModal — edit mode', () => {
     expect(id).toBe(editing.id);
     expect(changes.title).toBe('Lab Report');
     expect(changes.course).toBe('BIO101');
+  });
+
+  it('forwards a status change to onUpdate', async () => {
+    const onUpdate = vi.fn(async () => {});
+    const editing = editingAssignment(); // starts as in_progress
+    const screen = render(React.createElement(AssignmentFormModal, makeProps({ editing, onUpdate })));
+    await screen.flush();
+    screen.firePressOnText('Completed'); // status button
+    screen.firePressOnText('Save Changes');
+    await screen.flush();
+    expect(onUpdate).toHaveBeenCalledOnce();
+    const [, changes] = onUpdate.mock.calls[0];
+    expect(changes.status).toBe('completed');
   });
 });
 
