@@ -7,12 +7,26 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # `test:ci` runs the coverage build, which is cold on a fresh runner (~minutes)
+    # and can intermittently stall on Vitest's worker handshake. Cap the job so a
+    # stall fails fast instead of inheriting GitHub's 6 h default.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
+      # Persist Vitest's transform cache across runs so most CI runs are warm
+      # (~seconds) instead of paying the full babel/metro transform cost cold.
+      # Keyed on the lockfile + test config; any change to those busts the cache.
+      - name: Cache Vitest transform cache
+        uses: actions/cache@v4
+        with:
+          path: .vitest-cache
+          key: vitest-cache-${{ runner.os }}-${{ hashFiles('package-lock.json', 'vitest.config.js', 'babel.config.js') }}
+          restore-keys: |
+            vitest-cache-${{ runner.os }}-
       - run: npm ci
       - run: npm run test:ci
       - uses: actions/upload-artifact@v4
