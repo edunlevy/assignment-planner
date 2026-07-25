@@ -511,4 +511,55 @@ describe('AppState TZ reschedule', () => {
     // the new baseline.
     expect(await AsyncStorage.getItem(`device_tz_${USER_ID}`)).toBe(CURRENT_TZ);
   });
+
+  test('an AppState "active" that fires after unmount reschedules nothing', async () => {
+    const { unmount } = await mountWithOneIncompleteRow();
+    // Seed a changed TZ so, absent the teardown guard, this WOULD reschedule.
+    await AsyncStorage.setItem(`device_tz_${USER_ID}`, DIFFERENT_TZ);
+
+    unmount(); // AppState effect cleanup flips its cancelled flag
+
+    Notifications.scheduleNotificationAsync.mockReset();
+    Notifications.cancelScheduledNotificationAsync.mockClear();
+
+    // The listener callback outlives the effect; invoking it now must produce
+    // no rescheduling for the torn-down user. Defense in depth: the handler's
+    // entry `if (cancelled) return` guard AND rescheduleAll's own shouldCancel
+    // check both enforce this.
+    await act(async () => {
+      await appStateCallback('active');
+      await flushMicrotasks();
+    });
+
+    expect(Notifications.cancelScheduledNotificationAsync).not.toHaveBeenCalled();
+    expect(Notifications.scheduleNotificationAsync).not.toHaveBeenCalled();
+  });
+});
+
+// ===========================================================================
+// Load-effect teardown — unmount mid-fetch
+// ===========================================================================
+describe('load effect teardown', () => {
+  test('bails without committing when the hook unmounts mid-fetch', async () => {
+    // Hold the fetch open so we can tear down before it resolves.
+    let resolveFetch;
+    dbFetch.mockImplementation(() => new Promise(r => { resolveFetch = r; }));
+
+    const { result, unmount } = renderHook(() => useAssignments(USER_ID));
+    await flushMicrotasks(); // load effect is now awaiting dbFetch
+
+    unmount(); // load effect cleanup sets cancelled = true
+
+    // Resolve the fetch AFTER teardown: the post-Promise.all `if (cancelled)
+    // return` must short-circuit before state commit or reminder scheduling.
+    await act(async () => {
+      resolveFetch([dbRow({ id: 'unmounted-fetch' })]);
+      await flushMicrotasks();
+    });
+
+    expect(result.current.assignments).toEqual([]);
+    expect(Notifications.scheduleNotificationAsync).not.toHaveBeenCalled();
+    // The torn-down user's cache is never populated with the late result.
+    expect(await AsyncStorage.getItem(`assignments_${USER_ID}`)).toBeNull();
+  });
 });
