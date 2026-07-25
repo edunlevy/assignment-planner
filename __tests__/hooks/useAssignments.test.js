@@ -7,6 +7,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
+import * as Calendar from 'expo-calendar';
 import { act } from 'react-test-renderer';
 
 // IMPORTANT: vi.mock is hoisted by vitest to the top of the file, BEFORE the
@@ -839,5 +840,172 @@ describe('unmount', () => {
     // The realtime cleanup `return () => { cancelled=true; supabase.removeChannel(channel) }`
     // should have fired.
     expect(supabase.removeChannel).toHaveBeenCalledWith(channel);
+  });
+});
+
+// ===========================================================================
+// Sync-error API surface (reportSyncError / clearSyncError)
+// ===========================================================================
+describe('sync error API', () => {
+  test('reportSyncError sets the banner text and clearSyncError clears it', async () => {
+    const { result } = await mountHook();
+    expect(result.current.syncError).toBe('');
+
+    act(() => { result.current.reportSyncError('Could not save.'); });
+    expect(result.current.syncError).toBe('Could not save.');
+
+    act(() => { result.current.clearSyncError(); });
+    expect(result.current.syncError).toBe('');
+  });
+});
+
+// ===========================================================================
+// Calendar-sync wrappers (enableCalendarSync / disableCalendarSync)
+//
+// These thin wrappers in useAssignments close over the current assignments and
+// delegate to the calendar orchestration. Verify they flip the persisted
+// enable flag + exposed syncEnabled in both directions.
+// ===========================================================================
+describe('calendar sync wrappers', () => {
+  const enabledKey = `calendar_sync_enabled_${USER_ID}`;
+
+  test('enableCalendarSync forwards current assignments to the backfill; disableCalendarSync turns it off', async () => {
+    dbInsertEchoesBack();
+    Calendar.createEventAsync.mockClear();
+    const { result } = await mountHook();
+
+    // Put a real assignment in state so enabling has something to back-fill —
+    // this is the whole reason the wrapper closes over `assignments`.
+    await act(async () => { await result.current.insert(VALID_DRAFT); });
+    expect(result.current.calendarSyncEnabled).toBe(false);
+
+    await act(async () => { await result.current.enableCalendarSync(); });
+    expect(result.current.calendarSyncEnabled).toBe(true);
+    expect(await AsyncStorage.getItem(enabledKey)).toBe('true');
+    // The wrapper forwarded the current assignment list: backfill created an
+    // event for it. (Fails if enableCalendarSync dropped its assignments arg.)
+    expect(Calendar.createEventAsync).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ title: VALID_DRAFT.title }),
+    );
+
+    // deleteEvents=false → no calendar removal, just clear the event map + flag.
+    await act(async () => { await result.current.disableCalendarSync(false); });
+    expect(result.current.calendarSyncEnabled).toBe(false);
+    expect(await AsyncStorage.getItem(enabledKey)).toBe('false');
+  });
+});
+
+// ===========================================================================
+// Tombstone expiry
+//
+// The active-tombstone case (a realtime UPDATE dropped right after a delete)
+// is covered in the `remove` describe above. This covers the OTHER side: once
+// the tombstone's TTL has elapsed, isTombstoned prunes the stale entry and a
+// later UPDATE for that id is applied normally rather than being dropped.
+// ===========================================================================
+describe('tombstone expiry', () => {
+  test('a realtime UPDATE after the tombstone TTL is applied, not dropped', async () => {
+    dbInsertEchoesBack();
+    dbDelete.mockResolvedValue(undefined);
+    const { result } = await mountHook();
+
+    let created;
+    await act(async () => { created = await result.current.insert(VALID_DRAFT); });
+    const { id } = created;
+
+    await act(async () => { await result.current.remove(id); });
+    expect(result.current.assignments).toHaveLength(0);
+
+    // Advance the clock past both the self-mutation TTL (8s) and the tombstone
+    // TTL (30s) so neither suppression path applies to the incoming echo.
+    Date.now.mockReturnValue(NOW + 31_000);
+
+    await emitRealtime({
+      eventType: 'UPDATE',
+      new: { ...VALID_DRAFT, id, title: 'Back from the dead' },
+    });
+
+    // Tombstone expired → isTombstoned pruned it and returned false → the
+    // upsert reconciles the row back into state.
+    expect(result.current.assignments).toHaveLength(1);
+    expect(result.current.assignments[0].title).toBe('Back from the dead');
+  });
+});
+
+// ===========================================================================
+// Realtime teardown — isCancelled guards
+//
+// A realtime event can land after the user logs out / the hook unmounts (the
+// captured channel callback outlives the effect). The reconcile handlers must
+// bail on their isCancelled() checks rather than scheduling reminders or
+// writing to a torn-down user's state.
+// ===========================================================================
+describe('realtime teardown', () => {
+  test('an INSERT that arrives after unmount schedules nothing', async () => {
+    const { unmount } = await mountHook();
+    unmount(); // realtime cleanup flips cancelled → true
+
+    Notifications.scheduleNotificationAsync.mockClear();
+    await emitRealtime({
+      eventType: 'INSERT',
+      new: { ...VALID_DRAFT, id: 'post-teardown', title: 'Too late' },
+    });
+
+    // No reminders are scheduled for a torn-down user. This is defense in
+    // depth: enqueueUpsert's entry isCancelled() guard AND scheduleFor's own
+    // teardown check both enforce it; the mid-flight test below isolates the
+    // post-scheduleFor guard specifically.
+    expect(Notifications.scheduleNotificationAsync).not.toHaveBeenCalled();
+  });
+
+  test('a DELETE that arrives after unmount does not cancel existing reminders', async () => {
+    const { unmount } = await mountHook();
+    // Seed a reminder-map entry for the id so cancelFor WOULD cancel a real
+    // notification if onDelete ran — that way the assertion actually gates the
+    // isCancelled() guard instead of passing because there was nothing to cancel.
+    await AsyncStorage.setItem(
+      `reminder_ids_${USER_ID}`,
+      JSON.stringify({ 'post-teardown': ['seeded-notif'] }),
+    );
+    unmount();
+
+    Notifications.cancelScheduledNotificationAsync.mockClear();
+    await emitRealtime({ eventType: 'DELETE', old: { id: 'post-teardown' } });
+
+    // onDelete's first isCancelled() short-circuits before cancelFor runs, so
+    // the seeded reminder is left untouched. (Fails if the guard is removed.)
+    expect(Notifications.cancelScheduledNotificationAsync).not.toHaveBeenCalledWith('seeded-notif');
+  });
+
+  test('an INSERT whose scheduling finishes after teardown is not committed to the cache', async () => {
+    const { unmount } = await mountHook();
+
+    // Gate the iOS slot-budget read so scheduleFor blocks mid-flight.
+    let releasePending;
+    Notifications.getAllScheduledNotificationsAsync.mockReturnValue(
+      new Promise(r => { releasePending = r; }),
+    );
+
+    // Bare call (no act): this only enqueues async work that immediately blocks
+    // on the gated read — no React state update happens yet.
+    realtimeCallback({
+      eventType: 'INSERT',
+      new: { ...VALID_DRAFT, id: 'midflight', title: 'Racing teardown' },
+    });
+    await act(async () => { await flushMicrotasks(); }); // park at the gated await
+
+    // Tear down while scheduling is in flight, then let scheduling finish.
+    unmount();
+    await act(async () => {
+      releasePending([]);
+      await flushMicrotasks();
+    });
+
+    // The post-scheduleFor isCancelled() guard bails before commitLocal, so the
+    // torn-down user's cached list never gains the row.
+    const raw = await AsyncStorage.getItem(`assignments_${USER_ID}`);
+    const cached = raw ? JSON.parse(raw) : [];
+    expect(cached.find(a => a.id === 'midflight')).toBeUndefined();
   });
 });
