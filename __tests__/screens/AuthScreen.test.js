@@ -9,7 +9,8 @@ vi.mock('../../lib/socialAuth', () => ({
   signInWithGoogle: vi.fn(async () => null),
 }));
 
-import { signInWithGoogle } from '../../lib/socialAuth';
+import * as AppleAuthentication from 'expo-apple-authentication';
+import { signInWithApple, signInWithGoogle } from '../../lib/socialAuth';
 import AuthScreen from '../../screens/AuthScreen';
 
 beforeEach(() => {
@@ -219,5 +220,46 @@ describe('AuthScreen', () => {
     pressByText(screen, 'Continue with Google');
     await screen.flush();
     expect(signInWithGoogle).toHaveBeenCalled();
+  });
+
+  it('shows a friendly error when signInWithPassword rejects (network failure)', async () => {
+    supabase.auth.signInWithPassword.mockRejectedValue(new Error('Network request failed'));
+    const screen = render(React.createElement(AuthScreen));
+    fillInput(screen, 'you@example.com', 'user@test.com');
+    fillInput(screen, 'Min 8 characters', 'password123');
+    pressByText(screen, 'Log In', 1);
+    await screen.flush();
+    expect(screen.getByText('Something went wrong. Please check your connection and try again.')).toBeTruthy();
+  });
+
+  it('shows a friendly error when resetPasswordForEmail rejects', async () => {
+    supabase.auth.resetPasswordForEmail.mockRejectedValue(new Error('Network request failed'));
+    const screen = render(React.createElement(AuthScreen));
+    fillInput(screen, 'you@example.com', 'user@test.com');
+    pressByText(screen, 'Forgot password?');
+    await screen.flush();
+    expect(screen.getByText('Something went wrong. Please check your connection and try again.')).toBeTruthy();
+  });
+
+  it('does not start Apple sign-in while another auth request is loading', async () => {
+    // Make the Apple button available and hold a login open so `loading` stays true.
+    AppleAuthentication.isAvailableAsync.mockResolvedValue(true);
+    let resolveLogin;
+    supabase.auth.signInWithPassword.mockReturnValue(new Promise(r => { resolveLogin = r; }));
+
+    const screen = render(React.createElement(AuthScreen));
+    await screen.flush(); // appleAvailable → true
+
+    fillInput(screen, 'you@example.com', 'user@test.com');
+    fillInput(screen, 'Min 8 characters', 'password123');
+    pressByText(screen, 'Log In', 1); // starts login; loading = true, promise pending
+
+    const appleButton = screen.getAllByType('AppleAuthenticationButton')[0];
+    act(() => { appleButton.props.onPress(); });
+
+    // The loading guard short-circuits handleAppleSignIn.
+    expect(signInWithApple).not.toHaveBeenCalled();
+
+    await act(async () => { resolveLogin({ error: null }); await screen.flush(); });
   });
 });

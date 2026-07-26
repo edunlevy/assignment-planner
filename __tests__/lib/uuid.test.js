@@ -42,4 +42,37 @@ describe('uuidv4', () => {
       globalThis.crypto.randomUUID = origRandomUUID;
     }
   });
+
+  test('falls back to the CSPRNG (crypto.getRandomValues) when randomUUID is unavailable', () => {
+    const c = globalThis.crypto;
+    if (typeof c?.getRandomValues !== 'function') return; // env without WebCrypto
+    const origRandomUUID = c.randomUUID;
+    const getSpy = vi.spyOn(c, 'getRandomValues');
+    try {
+      c.randomUUID = undefined; // force the fallback path
+      const id = uuidv4();
+      expect(getSpy).toHaveBeenCalled(); // CSPRNG used, not Math.random
+      expect(id).toMatch(UUID_V4_RE);
+    } finally {
+      c.randomUUID = origRandomUUID;
+      getSpy.mockRestore();
+    }
+  });
+
+  test('last-resort Math.random fallback still yields a valid v4 when no crypto exists', () => {
+    const c = globalThis.crypto;
+    const origRandomUUID = c?.randomUUID;
+    // Shadow BOTH CSPRNG APIs with non-functions so uuidv4 takes the
+    // Math.random branch. getRandomValues is a non-writable prototype method,
+    // so it must be shadowed via defineProperty and restored by delete;
+    // randomUUID is assignable on the instance.
+    try {
+      c.randomUUID = undefined;
+      Object.defineProperty(c, 'getRandomValues', { value: undefined, configurable: true });
+      for (let i = 0; i < 50; i++) expect(uuidv4()).toMatch(UUID_V4_RE);
+    } finally {
+      c.randomUUID = origRandomUUID;
+      delete c.getRandomValues; // remove the own-property shadow → prototype method restored
+    }
+  });
 });
