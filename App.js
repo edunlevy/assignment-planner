@@ -1,4 +1,3 @@
-import * as Linking from 'expo-linking';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -18,10 +17,10 @@ import EmptyState from './components/EmptyState';
 import WorkOnNextCard from './components/WorkOnNextCard';
 import { pickWorkOnNext, sortForList } from './lib/ordering';
 import { useAssignments } from './hooks/useAssignments';
+import { useAuthSession } from './hooks/useAuthSession';
+import { useDeepLinkAuth } from './hooks/useDeepLinkAuth';
 import { usePreferences } from './hooks/usePreferences';
-import { parseAuthRedirect } from './lib/deepLink';
 import { buildWeeklySeries } from './lib/recurring';
-import { startAuthAutoRefresh, supabase } from './lib/supabase';
 import { uuidv4 } from './lib/uuid';
 import AuthScreen from './screens/AuthScreen';
 import ProfileModal from './screens/ProfileModal';
@@ -31,10 +30,11 @@ import ResetPasswordModal from './screens/ResetPasswordModal';
 // All assignment lifecycle logic lives in useAssignments; the form lives in AssignmentFormModal.
 function AppScreen() {
   const insets = useSafeAreaInsets();
-  const [session, setSession] = useState(null);
-  const [sessionLoaded, setSessionLoaded] = useState(false);
+  // Session lifecycle (getSession + onAuthStateChange + auto-refresh + the
+  // recovery flag) and the auth deep-link handler live in dedicated hooks.
+  const { session, sessionLoaded, recoveryMode, setRecoveryMode } = useAuthSession();
+  useDeepLinkAuth(setRecoveryMode);
   const [profileVisible, setProfileVisible] = useState(false);
-  const [recoveryMode, setRecoveryMode] = useState(false);
   const [viewMode, setViewMode] = useState('list');
   const [modalVisible, setModalVisible] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -55,15 +55,6 @@ function AppScreen() {
       clearInterval(interval);
       sub.remove();
     };
-  }, []);
-
-  // Own the Supabase auth auto-refresh AppState listener's lifecycle here
-  // (mount once, remove on unmount) instead of lib/supabase.js registering
-  // an unremovable listener at module-evaluation time — see
-  // startAuthAutoRefresh's comment for why that leaked across Fast Refresh.
-  useEffect(() => {
-    const sub = startAuthAutoRefresh();
-    return () => sub?.remove();
   }, []);
 
   const userId = session?.user?.id ?? null;
@@ -89,84 +80,6 @@ function AppScreen() {
   // rankingPreference in user_metadata only exists for users who signed up
   // through the email/password form; social sign-ins fall back to default.
   const { ranking } = usePreferences(userId, session?.user?.user_metadata?.rankingPreference);
-
-  // Check for existing session and listen for auth changes.
-  //
-  // Hardened against an unreachable/slow backend so the app can't hang on the
-  // loading screen forever (e.g. a paused Supabase project): getSession
-  // rejections are caught, and an 8 s safety timeout flips the loading gate no
-  // matter what. `markLoaded` only clears the gate once; session updates still
-  // apply whenever they arrive (a late getSession resolve or onAuthStateChange),
-  // so a brief outage degrades to the auth screen instead of an infinite
-  // spinner, and recovers automatically once the backend responds.
-  useEffect(() => {
-    let settled = false;
-    const markLoaded = () => {
-      if (!settled) {
-        settled = true;
-        setSessionLoaded(true);
-      }
-    };
-    supabase.auth.getSession()
-      .then(({ data: { session: s } }) => { setSession(s); markLoaded(); })
-      .catch(() => markLoaded());
-    const timer = setTimeout(markLoaded, 8000);
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
-      setSession(s);
-      markLoaded();
-      if (!s) setRecoveryMode(false);
-    });
-    return () => {
-      clearTimeout(timer);
-      subscription.unsubscribe();
-    };
-  }, []);
-
-  // Handle password-reset deep links
-  // (assignmentplanner://reset-password#access_token=...&type=recovery).
-  // With detectSessionInUrl:false we parse the URL ourselves. setSession emits SIGNED_IN
-  // (not PASSWORD_RECOVERY), so we set recoveryMode directly on success.
-  useEffect(() => {
-    async function handleDeepLink(url) {
-      if (!url) return;
-      // Match on path segment, not substring — keeps confirm/reset branches exclusive.
-      const isResetLink = /(^|\/)reset-password(\b|\/|\?|#)/.test(url);
-      const isConfirmLink = /(^|\/)(confirm|login)(\b|\/|\?|#)/.test(url);
-      const params = parseAuthRedirect(url);
-
-      // PKCE flow: Supabase sends ?code= instead of fragment tokens.
-      // Recovery and signup confirmation share the same exchange call; the
-      // URL path tells us which UI to surface afterward.
-      if (params.code) {
-        const { error } = await supabase.auth.exchangeCodeForSession(params.code);
-        if (!error && isResetLink) setRecoveryMode(true);
-        // Signup-confirm: onAuthStateChange will fire SIGNED_IN; nothing else to do.
-        return;
-      }
-
-      // Implicit flow: fragment tokens
-      if (params.type === 'recovery' && params.access_token) {
-        const { error } = await supabase.auth.setSession({
-          access_token: params.access_token,
-          refresh_token: params.refresh_token ?? '',
-        });
-        if (!error) setRecoveryMode(true);
-        return;
-      }
-
-      // Implicit-flow signup confirmation: tokens in the fragment, type=signup.
-      if (isConfirmLink && params.type === 'signup' && params.access_token) {
-        await supabase.auth.setSession({
-          access_token: params.access_token,
-          refresh_token: params.refresh_token ?? '',
-        });
-      }
-    }
-    Linking.getInitialURL().then(handleDeepLink);
-    const sub = Linking.addEventListener('url', ({ url }) => handleDeepLink(url));
-    return () => sub.remove();
-  }, []);
-
 
   function openAddModal() {
     setEditingId(null);
