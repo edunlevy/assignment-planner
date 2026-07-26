@@ -254,6 +254,11 @@ describe('AuthScreen', () => {
     fillInput(screen, 'Min 8 characters', 'password123');
     pressByText(screen, 'Log In', 1); // starts login; loading = true, promise pending
 
+    // While loading, the Apple button is wrapped in a non-interactive, dimmed
+    // View (visual parity with the Google button).
+    const disabledWrapper = screen.getAllByType('View').find(v => v.props.pointerEvents === 'none');
+    expect(disabledWrapper).toBeTruthy();
+
     const appleButton = screen.getAllByType('AppleAuthenticationButton')[0];
     act(() => { appleButton.props.onPress(); });
 
@@ -261,5 +266,8 @@ describe('AuthScreen', () => {
     expect(signInWithApple).not.toHaveBeenCalled();
 
     await act(async () => { resolveLogin({ error: null }); await screen.flush(); });
+
+    // Once loading clears, the button is interactive again (no disabled wrapper).
+    expect(screen.getAllByType('View').find(v => v.props.pointerEvents === 'none')).toBeFalsy();
   });
 });
