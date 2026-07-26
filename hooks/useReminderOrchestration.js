@@ -16,6 +16,7 @@ import {
   scheduleRemindersBatch,
   storeDeviceTimezone,
 } from '../lib/notifications';
+import { createUserKeyedLock } from '../lib/userKeyedLock';
 
 // Thin, userId-parameterized orchestration layer over the lib/notifications
 // primitives. It owns NO React state and performs NO setState/commitLocal.
@@ -38,17 +39,10 @@ import {
 // so consumers can safely depend on the whole `reminders` object without
 // re-running effects more often than the underlying userId changes.
 
-// See withEventMapLock in useCalendarOrchestration.js for the full rationale
-// — same lost-update hazard, same per-userId serialization fix, applied here
-// to reminder_ids_${userId} instead of calendar_events_${userId}.
-const reminderMapLocks = new Map();
-function withReminderMapLock(userId, fn) {
-  const prev = reminderMapLocks.get(userId) ?? Promise.resolve();
-  const settled = prev.then(fn, fn);
-  const cleanup = settled.catch(() => {});
-  reminderMapLocks.set(userId, cleanup);
-  return settled;
-}
+// Per-userId serialization for the reminder_ids_${userId} map — same
+// lost-update hazard and fix as the calendar orchestration's event map. See
+// lib/userKeyedLock.js for the full rationale.
+const withReminderMapLock = createUserKeyedLock();
 
 export function useReminderOrchestration(userId) {
   // Schedule (or refresh) reminders for ONE assignment.
