@@ -2,11 +2,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import {
-  VALID_STATUSES,
   isValidDate,
-  rowsMatch,
   sanitizeAssignment,
 } from '../lib/assignment';
+import { createMutationGuards } from '../lib/mutationGuards';
 import {
   dbDelete,
   dbDeleteSeries,
@@ -79,112 +78,28 @@ export function useAssignments(userId) {
   // The latest "data version" we trust. Fetch results <= this are ignored.
   const dataVersionRef = useRef(0);
 
-  // Self-mutation tracking. The goal is to suppress only the realtime echo
-  // of OUR write — never to drop a genuine concurrent change from another
-  // device. Approach varies per event kind:
+  // Concurrency guards — self-mutation echo suppression, delete tombstones, and
+  // the shared per-id serialization queue that keeps a local write's own echo
+  // (and real concurrent remote events for the same id) from racing on the
+  // reminder map / state. Extracted to lib/mutationGuards.js (framework-free +
+  // unit-tested there); see that module for the per-event-kind reasoning.
   //
-  //   INSERT — we mint the id client-side, so any INSERT echo for that id
-  //   is necessarily ours (no other device can have produced this UUID).
-  //   The marker has a `pending` phase (no TTL, lives until dbInsert
-  //   settles) so a slow network can't expire it before the echo arrives.
-  //
-  //   UPDATE — concurrent updates from other devices can target the same
-  //   id, so we cannot suppress by id alone. After dbUpdate settles we
-  //   store the returned row as a `signature`; an UPDATE echo is treated
-  //   as ours only when its (id, mapped fields) match. Anything else is a
-  //   real remote write and goes through.
-  //
-  //   DELETE — applying a DELETE twice is a no-op for both state and the
-  //   reminder map, so there is no need to suppress at all. Even better:
-  //   not suppressing means a concurrent same-id delete from another
-  //   device can never be silently dropped.
-  //
-  // `clearSelfMutation` is called on DB failure so a stale marker doesn't
-  // outlive a doomed write and block real remote events from another
-  // device targeting that id.
-  const selfMutationsRef = useRef(new Map());
-  const SELF_MUTATION_TTL_MS = 8000;
-
-  // Tombstones: ids of rows we DELETED on this device, kept for a short
-  // window. The race they prevent: another device commits an UPDATE
-  // *before* our DELETE lands at the DB, but its realtime event arrives
-  // at us *after* our delete completes. That event is real (the server
-  // saw it), but applying it would resurrect a row whose final server
-  // state is "deleted". The tombstone tells the realtime handler to
-  // drop UPDATE/INSERT events for that id until the TTL elapses (by
-  // which time any in-flight echoes have surely landed).
-  const tombstonesRef = useRef(new Map());
-  const TOMBSTONE_TTL_MS = 30000;
-  const markTombstone = useCallback(id => {
-    tombstonesRef.current.set(id, Date.now() + TOMBSTONE_TTL_MS);
-  }, []);
-  const isTombstoned = useCallback(id => {
-    const exp = tombstonesRef.current.get(id);
-    if (!exp) return false;
-    if (Date.now() > exp) {
-      tombstonesRef.current.delete(id);
-      return false;
-    }
-    return true;
-  }, []);
-  const markPendingInsert = useCallback(id => {
-    selfMutationsRef.current.set(id, { phase: 'pending', signature: null, expiresAt: null });
-  }, []);
-  const settleSelfMutation = useCallback((id, signature) => {
-    selfMutationsRef.current.set(id, {
-      phase: 'settled',
-      signature,
-      expiresAt: Date.now() + SELF_MUTATION_TTL_MS,
-    });
-  }, []);
-  const clearSelfMutation = useCallback(id => {
-    selfMutationsRef.current.delete(id);
-  }, []);
-  // Returns true if this realtime event matches a write WE issued, by the
-  // narrowest criterion we can prove for that event kind. Anything else
-  // is treated as a remote event and processed.
-  const isOwnEcho = useCallback((id, event, incomingRow) => {
-    const marker = selfMutationsRef.current.get(id);
-    if (!marker) return false;
-    if (marker.phase === 'settled' && Date.now() > marker.expiresAt) {
-      selfMutationsRef.current.delete(id);
-      return false;
-    }
-    if (event === 'INSERT') {
-      // Brand-new UUID; if we have any marker for it, the event is ours.
-      return true;
-    }
-    if (event === 'UPDATE') {
-      return marker.phase === 'settled' && rowsMatch(marker.signature, incomingRow);
-    }
-    // DELETE: never suppress — both our local delete and another device's
-    // delete of the same row converge on the same final state.
-    return false;
-  }, []);
-
-  // Shared per-id promise chain used by BOTH the local UPDATE path and
-  // the realtime handler. Two reasons it must be shared:
-  //   1. The realtime echo of a local UPDATE can arrive before dbUpdate's
-  //      await resolves; if both ran concurrently they would race on the
-  //      reminder map and leak the loser's scheduled OS notifications.
-  //   2. Real concurrent UPDATE/DELETE events from other devices targeting
-  //      the same id must still be serialized in arrival order (already
-  //      enforced by the queue) and must not be dropped by a too-coarse
-  //      suppression filter (the isOwnEcho check is rerun inside the
-  //      queued work, AFTER any in-flight local mutation has settled).
-  // Returned promise resolves/rejects with the wrapped fn's outcome so
-  // callers (e.g. App.js's runMutation) still see the real result.
-  const queuesRef = useRef(new Map());
-  const enqueueForId = useCallback((id, fn) => {
-    const chain = queuesRef.current.get(id) ?? Promise.resolve();
-    const result = chain.then(fn);
-    const cleanup = result.catch(() => {});
-    queuesRef.current.set(id, cleanup);
-    cleanup.then(() => {
-      if (queuesRef.current.get(id) === cleanup) queuesRef.current.delete(id);
-    });
-    return result;
-  }, []);
+  // One instance lives for this hook's whole lifetime — created once via the
+  // ref-init below and NOT reset on userId change, exactly as the raw
+  // selfMutations/tombstones/queues Maps were before. The destructured methods
+  // are stable references (the instance never changes), so the mutation/realtime
+  // callbacks below can keep depending on them without churning.
+  const guardsRef = useRef(null);
+  if (guardsRef.current === null) guardsRef.current = createMutationGuards();
+  const {
+    markPendingInsert,
+    settleSelfMutation,
+    clearSelfMutation,
+    isOwnEcho,
+    markTombstone,
+    isTombstoned,
+    enqueueForId,
+  } = guardsRef.current;
 
   // Apply a state update + write-through to AsyncStorage.
   // Also bumps the data version so any in-flight fetch can't overwrite it.
