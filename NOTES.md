@@ -165,8 +165,14 @@ Notes:
   occasionally slip through and be reapplied — that's idempotent except
   for the reminder reschedule, which would cancel + re-create the same
   reminder. Acceptable.
-- DELETE events only carry the row id (default `REPLICA IDENTITY`), which
-  is all we need. If you ever want the full old row on DELETE, run:
+- The subscription filters `user_id=eq.<uid>` on **every** event, DELETE
+  included. Under the default `REPLICA IDENTITY`, a DELETE's `old` record
+  carries only the primary key — `user_id` is absent — so Supabase cannot
+  evaluate the filter and the DELETE is **never delivered to other devices**
+  (the row lingers, and its reminders still fire). `REPLICA IDENTITY FULL` is
+  therefore **required**, not optional; the initial migration
+  (`db/migrations/2026-05-17_initial_assignments.sql`) sets it. If you
+  provisioned before that migration existed, run:
   `alter table public.assignments replica identity full;`
 
 ---
