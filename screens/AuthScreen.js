@@ -288,15 +288,22 @@ export default function AuthScreen() {
               <View style={styles.dividerLine} />
             </View>
 
-            {/* Sign in with Apple — iOS only, when available */}
+            {/* Sign in with Apple — iOS only, when available. Wrapped so it
+                dims and stops accepting taps while loading, matching the Google
+                button's disabled treatment (the handler is also guarded). */}
             {appleAvailable && (
-              <AppleAuthentication.AppleAuthenticationButton
-                buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
-                buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
-                cornerRadius={12}
-                style={styles.appleButton}
-                onPress={handleAppleSignIn}
-              />
+              <View
+                style={loading ? styles.buttonDisabled : null}
+                pointerEvents={loading ? 'none' : 'auto'}
+              >
+                <AppleAuthentication.AppleAuthenticationButton
+                  buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
+                  buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
+                  cornerRadius={12}
+                  style={styles.appleButton}
+                  onPress={handleAppleSignIn}
+                />
+              </View>
             )}
 
             {/* Continue with Google */}
