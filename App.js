@@ -26,6 +26,14 @@ import AuthScreen from './screens/AuthScreen';
 import ProfileModal from './screens/ProfileModal';
 import ResetPasswordModal from './screens/ResetPasswordModal';
 
+// User-facing copy for the sync-error banner, one per mutation kind. Centralised
+// so the shared "Check your connection and try again." wording stays consistent.
+const SYNC_ERROR = {
+  save: 'Could not save. Check your connection and try again.',
+  delete: 'Could not delete. Check your connection and try again.',
+  deleteSeries: 'Could not delete series. Check your connection and try again.',
+};
+
 // Top-level session bootstrap + assignment list view.
 // All assignment lifecycle logic lives in useAssignments; the form lives in AssignmentFormModal.
 function AppScreen() {
@@ -104,7 +112,7 @@ function AppScreen() {
       await fn();
       handleClose();
     } catch {
-      reportSyncError('Could not save. Check your connection and try again.');
+      reportSyncError(SYNC_ERROR.save);
     } finally {
       setSaving(false);
     }
@@ -143,7 +151,7 @@ function AppScreen() {
     clearSyncError();
     remove(id)
       .then(() => handleClose())
-      .catch(() => reportSyncError('Could not delete. Check your connection and try again.'))
+      .catch(() => reportSyncError(SYNC_ERROR.delete))
       .finally(() => setSaving(false));
   }
 
@@ -152,7 +160,7 @@ function AppScreen() {
     clearSyncError();
     removeSeries(seriesId)
       .then(() => handleClose())
-      .catch(() => reportSyncError('Could not delete series. Check your connection and try again.'))
+      .catch(() => reportSyncError(SYNC_ERROR.deleteSeries))
       .finally(() => setSaving(false));
   }
 
