@@ -82,6 +82,10 @@ export default function AuthScreen() {
       } else {
         setInfo('Password reset email sent! Check your inbox.');
       }
+    } catch {
+      // Supabase usually returns { error }, but a network/client failure
+      // rejects — surface it inline instead of leaving an unhandled rejection.
+      setError('Something went wrong. Please check your connection and try again.');
     } finally {
       setLoading(false);
     }
@@ -125,12 +129,17 @@ export default function AuthScreen() {
           setInfo('Account created! Check your email to confirm, then log in.');
         }
       }
+    } catch {
+      // Network/client rejection (not a Supabase { error } response) — show an
+      // inline message rather than silently swallowing it in finally.
+      setError('Something went wrong. Please check your connection and try again.');
     } finally {
       setLoading(false);
     }
   }
 
   async function handleAppleSignIn() {
+    if (loading) return; // the Apple button stays tappable during loading; guard here
     clearMessages();
     setLoading(true);
     try {
