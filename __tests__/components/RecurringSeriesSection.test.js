@@ -1,5 +1,4 @@
 import React from 'react';
-import { View } from 'react-native';
 import { render, act } from '../helpers/renderWithProviders';
 import RecurringSeriesSection from '../../components/RecurringSeriesSection';
 import { PRIMARY, DANGER } from '../../lib/constants';
@@ -9,8 +8,8 @@ import { PRIMARY, DANGER } from '../../lib/constants';
 // only covered incidentally through AssignmentFormModal).
 //
 // The component returns a fragment, so when expanded its render root is an
-// array. The shared render helper walks `node.children`, not array roots, so we
-// wrap it in a <View> (its real parent in AssignmentFormModal is a ScrollView).
+// array — rendered directly here to exercise the render helper's array-root
+// walk (a <View> wrapper was previously needed before that walk was fixed).
 
 const REPEAT_UNTIL_PLACEHOLDER = 'Tap to choose an end date';
 
@@ -26,9 +25,7 @@ function renderSection(overrides = {}) {
     onRepeatUntilChange: vi.fn(),
     ...overrides,
   };
-  const screen = render(
-    React.createElement(View, null, React.createElement(RecurringSeriesSection, props)),
-  );
+  const screen = render(React.createElement(RecurringSeriesSection, props));
   return { screen, props };
 }
 
@@ -47,10 +44,12 @@ function styleHasBackground(node, color) {
 }
 
 // Find the first Pressable whose concatenated text contains `text`.
+// Handles an array root (the component renders a fragment when expanded).
 function findPressableByText(root, text) {
   let found = null;
   (function walk(n) {
     if (found || !n || typeof n !== 'object') return;
+    if (Array.isArray(n)) { n.forEach(walk); return; }
     if (n.type === 'Pressable' && collectText(n).includes(text)) { found = n; return; }
     (n.children || []).forEach(walk);
   })(root);
@@ -119,6 +118,7 @@ describe('RecurringSeriesSection', () => {
       // The only DANGER-coloured text would be the error message.
       const tree = screen.toJSON();
       function hasDangerText(node) {
+        if (Array.isArray(node)) return node.some(hasDangerText); // fragment root
         if (!node || typeof node !== 'object') return false;
         const style = node.props?.style;
         const flat = Array.isArray(style) ? style : [style];

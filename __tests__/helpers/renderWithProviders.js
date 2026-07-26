@@ -16,9 +16,18 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 
-// Recursively walk a react-test-renderer tree node.
+// Recursively walk a react-test-renderer tree node. Handles an ARRAY root too:
+// a component whose root is a fragment renders as an array of nodes, and
+// without this the walk would visit nothing (arrays have no .type/.children),
+// making queries silently "find nothing" instead of matching.
 function walk(node, visitor) {
   if (!node) return;
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      if (child && typeof child === 'object') walk(child, visitor);
+    }
+    return;
+  }
   visitor(node);
   if (node.children) {
     for (const child of node.children) {
