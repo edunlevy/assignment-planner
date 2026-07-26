@@ -31,6 +31,16 @@ function storageKey(userId) {
   return `assignments_${userId}`;
 }
 
+// Fire-and-forget write-through of the assignment list to the per-user cache.
+// A no-op without a userId; errors are swallowed — the cache is best-effort
+// (in-memory state is the source of truth), so a failed write must never reject
+// a caller. Centralises the setItem+stringify+catch pattern used by commitLocal
+// and the load effect.
+function writeCache(userId, list) {
+  if (!userId) return;
+  AsyncStorage.setItem(storageKey(userId), JSON.stringify(list)).catch(() => {});
+}
+
 // Owns the full assignment lifecycle for a logged-in user:
 //   - Hybrid load: AsyncStorage cache shown first, Supabase fetch overlays.
 //   - Stale-fetch guard: writes that land mid-fetch are not clobbered.
@@ -106,9 +116,7 @@ export function useAssignments(userId) {
   const commitLocal = useCallback(updater => {
     setAssignments(prev => {
       const next = typeof updater === 'function' ? updater(prev) : updater;
-      if (userId) {
-        AsyncStorage.setItem(storageKey(userId), JSON.stringify(next)).catch(() => {});
-      }
+      writeCache(userId, next);
       dataVersionRef.current = fetchSeqRef.current + 1;
       fetchSeqRef.current = dataVersionRef.current;
       return next;
@@ -192,8 +200,7 @@ export function useAssignments(userId) {
 
         dataVersionRef.current = thisFetch;
         setAssignments(merged);
-        AsyncStorage.setItem(storageKey(userId), JSON.stringify(merged))
-          .catch(() => {});
+        writeCache(userId, merged);
       } catch {
         if (!cancelled) {
           setSyncError('Could not reach the server. Showing cached data.');
@@ -218,8 +225,7 @@ export function useAssignments(userId) {
           if (cancelled || thisFetch < dataVersionRef.current || !withReminders) return;
 
           setAssignments(withReminders);
-          AsyncStorage.setItem(storageKey(userId), JSON.stringify(withReminders))
-            .catch(() => {});
+          writeCache(userId, withReminders);
         } catch {
           // Permission or scheduling failed — assignments are already rendered.
         }
