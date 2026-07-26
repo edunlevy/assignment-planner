@@ -8,6 +8,7 @@ import {
   requestCalendarPermission,
   updateEventFor,
 } from '../lib/calendarSync';
+import { createUserKeyedLock } from '../lib/userKeyedLock';
 
 // Opt-in, per-device sync of assignments to a dedicated native calendar.
 // One-way (app → calendar) and LOCAL ONLY: the { assignmentId -> eventId }
@@ -50,25 +51,11 @@ async function saveEventMap(userId, map) {
   }
 }
 
-// AsyncStorage has no atomic read-modify-write primitive, and several call
-// sites below can legitimately run concurrently for the SAME userId — a
-// mutation's scheduleFor, a realtime echo's scheduleFor, and a load-time
-// backfill can all overlap. Without serializing them, a classic lost-update
-// race can drop one call's map entry: it reads the map before another call's
-// write lands, then overwrites that write with its own stale copy, orphaning
-// the dropped call's event (never deleted) and producing a duplicate on the
-// next backfill (which sees the id as "missing" again). Keyed by userId, not
-// per-assignment-id like useAssignments' enqueueForId — the underlying
-// AsyncStorage key is per-user, not per-assignment, so that's the correct
-// serialization granularity here.
-const eventMapLocks = new Map();
-function withEventMapLock(userId, fn) {
-  const prev = eventMapLocks.get(userId) ?? Promise.resolve();
-  const settled = prev.then(fn, fn);
-  const cleanup = settled.catch(() => {});
-  eventMapLocks.set(userId, cleanup);
-  return settled;
-}
+// Per-userId serialization for the calendar_events_${userId} map — prevents the
+// lost-update race where a mutation's scheduleFor, a realtime echo's
+// scheduleFor, and a load-time backfill overlap and one overwrites another's
+// map write. See lib/userKeyedLock.js for the full rationale.
+const withEventMapLock = createUserKeyedLock();
 
 // The authoritative "is sync on" signal for anything running inside
 // withEventMapLock. NOT the same as the hook's in-memory syncEnabledRef,
