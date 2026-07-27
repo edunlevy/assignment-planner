@@ -7,12 +7,6 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
-    "splash": {
-      "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
-    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.elliedunlevy.assignmentplanner",
@@ -29,7 +23,6 @@
         "backgroundColor": "#3B5BDB"
       },
       "package": "com.elliedunlevy.assignmentplanner",
-      "edgeToEdgeEnabled": true,
       "permissions": ["READ_CALENDAR", "WRITE_CALENDAR"]
     },
     "web": {
@@ -42,6 +35,14 @@
     },
     "owner": "edunlevy",
     "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#ffffff"
+        }
+      ],
       "@react-native-community/datetimepicker",
       "expo-apple-authentication",
       "expo-calendar",
