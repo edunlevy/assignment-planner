@@ -1,8 +1,20 @@
 # Assignment Planner — Stabilization & Refactoring Plan
 
-> Generated 2026-07-24. Baseline: `main` @ `f4c62f9`. Suite: **599 tests / 33 files, all green.**
-> Stack: Expo 54 · React Native 0.81 · React 19 · Supabase (auth + Postgres + Realtime) ·
-> expo-notifications · expo-calendar · AsyncStorage · NativeWind/Tailwind · Vitest 4 (node env).
+> **Status (updated 2026-07-27):** This plan is largely executed. Phase 1
+> (stabilization) is complete and Phase 2's refactors are merged
+> (`lib/mutationGuards.js`, `lib/userKeyedLock.js`, `useAuthSession`/
+> `useDeepLinkAuth`, test-infra + polish). Current stack: **Expo 57 · React
+> Native 0.86 · React 19.2.3** (the SDK upgrade is in a draft PR pending a
+> device build — see the security note in §2). Suite is now **680 tests / 41
+> files**; whole-app coverage ~93.5% lines / ~87.4% branches. The remaining
+> work is the two follow-ups tracked in memory (apply the DB migration to prod;
+> finish/merge the Expo 57 upgrade). The sections below are preserved as the
+> original plan of record.
+>
+> _Original plan-time baseline:_ Generated 2026-07-24 @ `main` `f4c62f9`, 599
+> tests / 33 files, on Expo 54 · React Native 0.81 · React 19 · Supabase (auth +
+> Postgres + Realtime) · expo-notifications · expo-calendar · AsyncStorage ·
+> NativeWind/Tailwind · Vitest 4 (node env).
 
 ---
 
