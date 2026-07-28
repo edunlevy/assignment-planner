@@ -89,6 +89,7 @@ function AppScreen() {
     insert,
     insertMany,
     update,
+    updateSeriesFrom,
     remove,
     removeSeries,
     calendarSyncEnabled,
@@ -157,6 +158,10 @@ function AppScreen() {
 
   function handleUpdate(id, changes) {
     return runMutation(() => update(id, changes));
+  }
+
+  function handleUpdateSeries(id, changes) {
+    return runMutation(() => updateSeriesFrom(id, changes));
   }
 
   function handleDelete(id) {
@@ -304,6 +309,7 @@ function AppScreen() {
         onCreate={handleCreate}
         onCreateRecurring={handleCreateRecurring}
         onUpdate={handleUpdate}
+        onUpdateSeries={handleUpdateSeries}
         onDelete={handleDelete}
         onDeleteSeries={handleDeleteSeries}
       />

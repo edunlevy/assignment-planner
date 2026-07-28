@@ -52,6 +52,7 @@ export function useAssignmentForm({
   onCreate,
   onCreateRecurring,
   onUpdate,
+  onUpdateSeries,
   onDelete,
   onDeleteSeries,
 }) {
@@ -114,7 +115,11 @@ export function useAssignmentForm({
     };
 
     if (isEditing) {
-      await onUpdate(editing.id, { ...base, status: form.status });
+      if (editing.seriesId) {
+        await chooseSeriesEditScope(base);
+      } else {
+        await onUpdate(editing.id, { ...base, status: form.status });
+      }
     } else if (form.repeatEnabled) {
       // The rule is derived through the same ruleFromForm the validator
       // used, so what gets built can't diverge from what was validated.
@@ -122,6 +127,46 @@ export function useAssignmentForm({
     } else {
       await onCreate({ ...base, status: 'not_started' });
     }
+  }
+
+  // Saving an edit to a series row asks which occurrences it applies to.
+  // "This and future" passes `base` WITHOUT status — each occurrence keeps
+  // its own completion state — while "just this one" keeps the current
+  // single-row behavior including the status field. On web, Alert.alert
+  // renders no actionable buttons, so window.confirm chooses between the
+  // two scopes (OK = this and future, Cancel = just this one) — the
+  // binary-confirm limitation matches handleDeleteSeries below; backing out
+  // entirely on web means closing the modal without saving.
+  function chooseSeriesEditScope(base) {
+    if (Platform.OS === 'web') {
+      // eslint-disable-next-line no-alert
+      const applyToFuture = window.confirm(
+        'Apply this change to this and all future occurrences? Cancel applies it to just this one.'
+      );
+      return applyToFuture
+        ? onUpdateSeries(editing.id, base)
+        : onUpdate(editing.id, { ...base, status: form.status });
+    }
+    return new Promise(resolve => {
+      Alert.alert(
+        'Apply changes to…',
+        'This assignment repeats. Apply your changes to just this occurrence, or to this and all future occurrences?',
+        [
+          { text: 'Cancel', style: 'cancel', onPress: () => resolve() },
+          {
+            text: 'Just this one',
+            onPress: () => resolve(onUpdate(editing.id, { ...base, status: form.status })),
+          },
+          {
+            text: 'This & future',
+            onPress: () => resolve(onUpdateSeries(editing.id, base)),
+          },
+        ],
+        // Android can dismiss without a button tap (back button / tap
+        // outside); resolve so the save spinner never hangs.
+        { onDismiss: () => resolve() },
+      );
+    });
   }
 
   function handleDelete() {

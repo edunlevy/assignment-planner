@@ -26,11 +26,12 @@ export default function AssignmentFormModal({
   onCreate,
   onCreateRecurring,
   onUpdate,
+  onUpdateSeries,
   onDelete,
   onDeleteSeries,
 }) {
   const insets = useSafeAreaInsets();
-  const f = useAssignmentForm({ visible, editing, onCreate, onCreateRecurring, onUpdate, onDelete, onDeleteSeries });
+  const f = useAssignmentForm({ visible, editing, onCreate, onCreateRecurring, onUpdate, onUpdateSeries, onDelete, onDeleteSeries });
   const { form, fieldErrors, isEditing } = f;
 
   return (

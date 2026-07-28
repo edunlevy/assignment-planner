@@ -5,6 +5,7 @@ import {
   dbInsert,
   dbInsertMany,
   dbUpdate,
+  dbUpdateSeriesFrom,
   fromDb,
 } from '../../lib/assignmentsDb';
 import { supabase } from '../../lib/supabase';
@@ -483,5 +484,110 @@ describe('dbDeleteSeries', () => {
       chainResolving({ error: { message: 'fail' } })
     );
     await expect(dbDeleteSeries('series-1', 'u')).rejects.toEqual({ message: 'fail' });
+  });
+});
+
+// F3b — "edit this and all future occurrences". One atomic RPC call over the
+// tail of a series (see db/migrations/2026-07-28_update_series_from.sql).
+// supabase.rpc is mocked wholesale in jest.setup.js (`jest.fn(async () => ({
+// data: null, error: null }))`), matching the pattern ProfileModal.test.js
+// uses for the delete_user RPC — override per test with mockResolvedValueOnce.
+describe('dbUpdateSeriesFrom', () => {
+  beforeEach(() => {
+    supabase.rpc.mockReset();
+  });
+
+  const BASE = {
+    title: 'Weekly Quiz',
+    course: 'CS101',
+    importance: 4,
+    complexity: 'long',
+    dueTime: '09:00',
+  };
+
+  test('calls update_series_from with the exact mapped payload (course -> p_class_name)', async () => {
+    supabase.rpc.mockResolvedValueOnce({ data: [], error: null });
+
+    await dbUpdateSeriesFrom('series-1', '2026-06-15', 2, BASE);
+
+    expect(supabase.rpc).toHaveBeenCalledWith('update_series_from', {
+      p_series_id: 'series-1',
+      p_from_date: '2026-06-15',
+      p_day_delta: 2,
+      p_title: 'Weekly Quiz',
+      p_class_name: 'CS101',
+      p_importance: 4,
+      p_complexity: 'long',
+      p_due_time: '09:00',
+    });
+  });
+
+  test('null-coalesces a missing/undefined dueTime to p_due_time: null', async () => {
+    supabase.rpc.mockResolvedValueOnce({ data: [], error: null });
+
+    await dbUpdateSeriesFrom('series-1', '2026-06-15', 0, { ...BASE, dueTime: undefined });
+
+    expect(supabase.rpc).toHaveBeenCalledWith(
+      'update_series_from',
+      expect.objectContaining({ p_due_time: null })
+    );
+  });
+
+  test('a null dueTime on base also maps to p_due_time: null', async () => {
+    supabase.rpc.mockResolvedValueOnce({ data: [], error: null });
+
+    await dbUpdateSeriesFrom('series-1', '2026-06-15', 0, { ...BASE, dueTime: null });
+
+    expect(supabase.rpc).toHaveBeenCalledWith(
+      'update_series_from',
+      expect.objectContaining({ p_due_time: null })
+    );
+  });
+
+  test('maps returned rows through fromDb', async () => {
+    const rows = [
+      {
+        id: 'r1', title: 'Weekly Quiz', class_name: 'CS101', due_date: '2026-06-17',
+        importance: 4, status: 'not_started', complexity: 'long', series_id: 'series-1',
+        due_time: '09:00',
+      },
+      {
+        id: 'r2', title: 'Weekly Quiz', class_name: 'CS101', due_date: '2026-06-24',
+        importance: 4, status: 'completed', complexity: 'long', series_id: 'series-1',
+        due_time: '09:00',
+      },
+    ];
+    supabase.rpc.mockResolvedValueOnce({ data: rows, error: null });
+
+    const result = await dbUpdateSeriesFrom('series-1', '2026-06-15', 2, BASE);
+
+    expect(result).toEqual([
+      {
+        id: 'r1', title: 'Weekly Quiz', course: 'CS101', dueDate: '2026-06-17',
+        importance: 4, status: 'not_started', complexity: 'long', seriesId: 'series-1',
+        dueTime: '09:00',
+      },
+      {
+        id: 'r2', title: 'Weekly Quiz', course: 'CS101', dueDate: '2026-06-24',
+        importance: 4, status: 'completed', complexity: 'long', seriesId: 'series-1',
+        dueTime: '09:00',
+      },
+    ]);
+  });
+
+  test('null data resolves to []', async () => {
+    supabase.rpc.mockResolvedValueOnce({ data: null, error: null });
+
+    const result = await dbUpdateSeriesFrom('series-1', '2026-06-15', 0, BASE);
+
+    expect(result).toEqual([]);
+  });
+
+  test('throws when Supabase returns an error', async () => {
+    supabase.rpc.mockResolvedValueOnce({ data: null, error: { message: 'rpc failed' } });
+
+    await expect(
+      dbUpdateSeriesFrom('series-1', '2026-06-15', 0, BASE)
+    ).rejects.toEqual({ message: 'rpc failed' });
   });
 });
