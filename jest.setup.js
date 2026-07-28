@@ -124,7 +124,7 @@ jest.mock('expo-calendar/legacy', () => ({
   deleteEventAsync: jest.fn(async () => undefined),
   getEventAsync: jest.fn(async () => { throw new Error('not found'); }),
   EntityTypes: { EVENT: 'event' },
-  SourceType: { LOCAL: 'local', CALDAV: 'caldav' },
+  SourceType: { LOCAL: 'local', CALDAV: 'caldav', SUBSCRIBED: 'subscribed', BIRTHDAYS: 'birthdays' },
   CalendarAccessLevel: { OWNER: 'owner' },
 }));
 

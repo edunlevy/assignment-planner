@@ -89,9 +89,17 @@ describe('requestCalendarAccess', () => {
     expect(getCalendarPermissions).not.toHaveBeenCalled();
   });
 
-  test("returns 'denied' when the permission calls themselves throw", async () => {
+  test("returns 'denied' when the permission calls themselves throw, after still attempting the write-only probe", async () => {
     Calendar.getCalendarPermissionsAsync.mockRejectedValue(new Error('native error'));
     expect(await requestCalendarAccess()).toBe('denied');
+    expect(getCalendarPermissions).toHaveBeenCalledWith(true);
+  });
+
+  test("still detects write-only when the full-access request throws (transient EventKit error must not mask 'Add Events Only')", async () => {
+    Calendar.getCalendarPermissionsAsync.mockResolvedValue({ status: 'undetermined' });
+    Calendar.requestCalendarPermissionsAsync.mockRejectedValue(new Error('E_CALENDAR_ERROR_UNKNOWN'));
+    getCalendarPermissions.mockResolvedValue({ status: 'granted', granted: true });
+    expect(await requestCalendarAccess()).toBe('writeOnly');
   });
 
   test("returns 'denied' when the write-only probe throws", async () => {
@@ -167,7 +175,31 @@ describe('ensureAssignmentCalendar', () => {
     Platform.OS = 'ios';
     Calendar.getDefaultCalendarAsync.mockRejectedValue(new Error('no default calendar'));
     Calendar.getSourcesAsync.mockResolvedValue([]);
-    await expect(ensureAssignmentCalendar()).rejects.toThrow('No calendar source');
+    await expect(ensureAssignmentCalendar()).rejects.toThrow('No writable calendar source');
+    expect(Calendar.createCalendarAsync).not.toHaveBeenCalled();
+  });
+
+  test('last-resort fallback skips read-only subscribed/birthday sources', async () => {
+    Platform.OS = 'ios';
+    Calendar.getDefaultCalendarAsync.mockRejectedValue(new Error('no default calendar'));
+    Calendar.getSourcesAsync.mockResolvedValue([
+      { id: 'subs-1', name: 'Holidays', type: 'subscribed' },
+      { id: 'bday-1', name: 'Birthdays', type: 'birthdays' },
+      { id: 'exchange-1', name: 'Work', type: 'exchange' },
+    ]);
+    await ensureAssignmentCalendar();
+    expect(Calendar.createCalendarAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceId: 'exchange-1' })
+    );
+  });
+
+  test('throws when only read-only sources exist rather than trying to create under one', async () => {
+    Platform.OS = 'ios';
+    Calendar.getDefaultCalendarAsync.mockRejectedValue(new Error('no default calendar'));
+    Calendar.getSourcesAsync.mockResolvedValue([
+      { id: 'subs-1', name: 'Holidays', type: 'subscribed' },
+    ]);
+    await expect(ensureAssignmentCalendar()).rejects.toThrow('No writable calendar source');
     expect(Calendar.createCalendarAsync).not.toHaveBeenCalled();
   });
 

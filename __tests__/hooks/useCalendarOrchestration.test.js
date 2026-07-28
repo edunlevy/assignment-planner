@@ -218,6 +218,27 @@ describe('enableSync', () => {
     expect(await AsyncStorage.getItem(`calendar_sync_enabled_${USER_ID}`)).not.toBe('true');
   });
 
+  test('rolls the on-disk flag back when the backfill throws, so disk and UI cannot disagree', async () => {
+    // enableSync writes the flag BEFORE backfilling (backfill's lock-guarded
+    // on-disk check requires it), so a backfill failure used to strand
+    // disk='true' while React state stayed off — next launch would silently
+    // read sync back on. The first ensureAssignmentCalendar call (direct,
+    // in enableSync) succeeds; the second (inside backfill, under the lock)
+    // throws.
+    ensureAssignmentCalendar
+      .mockResolvedValueOnce('cal-1')
+      .mockRejectedValueOnce(new Error('native failure mid-backfill'));
+    const { result } = renderHook(() => useCalendarOrchestration(USER_ID));
+    await flushMicrotasks();
+
+    let outcome;
+    await act(async () => { outcome = await result.current.enableSync([makeAssignment('a1')]); });
+
+    expect(outcome).toEqual({ ok: false, reason: 'createFailed' });
+    expect(result.current.syncEnabled).toBe(false);
+    expect(await AsyncStorage.getItem(`calendar_sync_enabled_${USER_ID}`)).toBe('false');
+  });
+
   test('grants: ensures the calendar, backfills, and flips syncEnabled', async () => {
     const { result } = renderHook(() => useCalendarOrchestration(USER_ID));
     await flushMicrotasks();

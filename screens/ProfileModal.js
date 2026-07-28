@@ -275,7 +275,7 @@ export default function ProfileModal({
             <View>
               <Text style={styles.error}>{calendarError}</Text>
               {calendarErrorNeedsSettings && (
-                <Pressable style={styles.openSettingsButton} onPress={() => Linking.openSettings()}>
+                <Pressable style={styles.openSettingsButton} onPress={() => { Linking.openSettings().catch(() => {}); }}>
                   <Text style={styles.openSettingsText}>Open Settings</Text>
                 </Pressable>
               )}

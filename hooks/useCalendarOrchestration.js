@@ -255,8 +255,26 @@ export function useCalendarOrchestration(userId) {
       console.warn('[calendarSync] could not create the assignment calendar', e);
       return { ok: false, reason: 'createFailed' };
     }
-    await AsyncStorage.setItem(enabledKey(userId), 'true');
-    await backfillMissingEvents(userId, assignments);
+    // The on-disk flag must flip BEFORE the backfill runs — backfill's
+    // lock-guarded isSyncEnabledOnDisk check bails when it reads 'false'.
+    // But that ordering means a backfill failure would strand the flag at
+    // 'true' while React state (and the toggle) stay off, and the next
+    // launch would silently read sync back on — so roll the flag back if
+    // anything past this point throws.
+    try {
+      await AsyncStorage.setItem(enabledKey(userId), 'true');
+      await backfillMissingEvents(userId, assignments);
+    } catch (e) {
+      console.warn('[calendarSync] enabling sync failed part-way; rolling back', e);
+      try {
+        await AsyncStorage.setItem(enabledKey(userId), 'false');
+      } catch {
+        // Rollback write failed too — nothing further to do; the reconcile
+        // paths re-check the flag on every run, so a stale 'true' degrades
+        // to a re-backfill attempt, not corruption.
+      }
+      return { ok: false, reason: 'createFailed' };
+    }
     setSyncEnabled(true);
     return { ok: true };
   }, [userId]);
