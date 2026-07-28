@@ -144,6 +144,92 @@ describe('fromDb / toDb — dueTime field', () => {
   });
 });
 
+describe('fromDb / toDb / dbUpdate — recurrenceRule field', () => {
+  const RULE = { freq: 'weekly', interval: 2, byWeekday: [1, 3], end: { count: 10 } };
+
+  test('fromDb extracts recurrenceRule when recurrence_rule is set', () => {
+    const out = fromDb({
+      id: 'r1', title: 't', class_name: 'c', due_date: '2026-01-01',
+      importance: 3, status: 'not_started', series_id: 's1',
+      recurrence_rule: RULE,
+    });
+    expect(out.recurrenceRule).toEqual(RULE);
+  });
+
+  test('fromDb omits recurrenceRule when recurrence_rule is null', () => {
+    const out = fromDb({
+      id: 'r1', title: 't', class_name: 'c', due_date: '2026-01-01',
+      importance: 3, status: 'not_started', series_id: null,
+      recurrence_rule: null,
+    });
+    expect(out.recurrenceRule).toBeUndefined();
+  });
+
+  test('dbInsert maps recurrenceRule to recurrence_rule, and to null when absent', async () => {
+    const c = chainResolving({
+      data: {
+        id: 'r1', title: 't', class_name: 'c', due_date: '2026-01-01',
+        importance: 3, status: 'not_started', series_id: 's1',
+        recurrence_rule: RULE,
+      },
+      single: true,
+    });
+    supabase.from.mockReturnValueOnce(c);
+    await dbInsert({
+      title: 't', course: 'c', dueDate: '2026-01-01',
+      importance: 3, status: 'not_started', seriesId: 's1', recurrenceRule: RULE,
+    }, 'user-1');
+    expect(c.insert).toHaveBeenCalledWith(expect.objectContaining({ recurrence_rule: RULE }));
+
+    const c2 = chainResolving({
+      data: {
+        id: 'r2', title: 't', class_name: 'c', due_date: '2026-01-01',
+        importance: 3, status: 'not_started', series_id: null,
+      },
+      single: true,
+    });
+    supabase.from.mockReturnValueOnce(c2);
+    await dbInsert({
+      title: 't', course: 'c', dueDate: '2026-01-01',
+      importance: 3, status: 'not_started',
+    }, 'user-1');
+    expect(c2.insert).toHaveBeenCalledWith(expect.objectContaining({ recurrence_rule: null }));
+  });
+
+  test("dbUpdate WITHOUT recurrenceRule sends no recurrence_rule key — an occurrence edit must never null out its series' stored rule", async () => {
+    // Load-bearing invariant: changesToDb deliberately skips undefined and
+    // ignores the nullable flag (unlike toDb). "Harmonizing" it with toDb's
+    // nullable-to-null branch would silently wipe recurrence_rule off every
+    // series row on the first single-occurrence edit, with green CI — this
+    // exact-payload assertion is what turns that mistake into a red test.
+    const c = chainResolving({
+      data: {
+        id: 'r1', title: 'new', class_name: 'c', due_date: '2026-01-01',
+        importance: 3, status: 'not_started', series_id: 's1',
+        recurrence_rule: RULE,
+      },
+      single: true,
+    });
+    supabase.from.mockReturnValueOnce(c);
+    await dbUpdate('r1', 'user-1', { title: 'new' });
+    expect(c.update).toHaveBeenCalledWith({ title: 'new' });
+  });
+
+  test('dbUpdate WITH recurrenceRule maps it through (F3b rule editing)', async () => {
+    const c = chainResolving({
+      data: {
+        id: 'r1', title: 't', class_name: 'c', due_date: '2026-01-01',
+        importance: 3, status: 'not_started', series_id: 's1',
+        recurrence_rule: RULE,
+      },
+      single: true,
+    });
+    supabase.from.mockReturnValueOnce(c);
+    await dbUpdate('r1', 'user-1', { recurrenceRule: RULE });
+    expect(c.update).toHaveBeenCalledWith({ recurrence_rule: RULE });
+  });
+});
+
 describe('dbFetch', () => {
   test('queries assignments for the user and maps rows', async () => {
     const rows = [

@@ -22,7 +22,7 @@ import { useAssignments } from './hooks/useAssignments';
 import { useAuthSession } from './hooks/useAuthSession';
 import { useDeepLinkAuth } from './hooks/useDeepLinkAuth';
 import { usePreferences } from './hooks/usePreferences';
-import { buildWeeklySeries } from './lib/recurring';
+import { buildSeries } from './lib/recurring';
 import { uuidv4 } from './lib/uuid';
 import AuthScreen from './screens/AuthScreen';
 import ProfileModal from './screens/ProfileModal';
@@ -138,10 +138,9 @@ function AppScreen() {
 
   function handleCreateRecurring(values) {
     return runMutation(() => {
-      const drafts = buildWeeklySeries({
+      const drafts = buildSeries({
         startISO: values.dueDate,
-        untilISO: values.repeatUntil,
-        intervalWeeks: values.repeatInterval ?? 1,
+        rule: values.rule,
         base: {
           title: values.title,
           course: values.course,

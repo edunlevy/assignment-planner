@@ -146,6 +146,37 @@ describe('rowsMatch — dueTime inclusion', () => {
   });
 });
 
+describe('rowsMatch — recurrenceRule inclusion', () => {
+  const RULE = { freq: 'weekly', interval: 2, byWeekday: [1, 3], end: { count: 10 } };
+
+  test('returns false when only recurrenceRule differs (a remote rule edit is a real change, not a self-echo)', () => {
+    const changed = { ...RULE, interval: 4 };
+    expect(rowsMatch({ ...BASE, recurrenceRule: RULE }, { ...BASE, recurrenceRule: changed })).toBe(false);
+  });
+
+  test('returns false when one side has a rule and the other does not', () => {
+    expect(rowsMatch({ ...BASE, recurrenceRule: RULE }, { ...BASE })).toBe(false);
+  });
+
+  test('treats undefined and null recurrenceRule as the same', () => {
+    expect(rowsMatch({ ...BASE, recurrenceRule: null }, { ...BASE, recurrenceRule: undefined })).toBe(true);
+  });
+
+  test('matches structurally across jsonb key reordering (Postgres does not preserve key order)', () => {
+    const reordered = { end: { count: 10 }, byWeekday: [1, 3], interval: 2, freq: 'weekly' };
+    expect(rowsMatch({ ...BASE, recurrenceRule: RULE }, { ...BASE, recurrenceRule: reordered })).toBe(true);
+  });
+
+  test('distinguishes rules that differ only inside nested values', () => {
+    const nested = { ...RULE, end: { count: 11 } };
+    expect(rowsMatch({ ...BASE, recurrenceRule: RULE }, { ...BASE, recurrenceRule: nested })).toBe(false);
+    const weekdayOrder = { ...RULE, byWeekday: [3, 1] };
+    // Array ORDER is significant (ruleFromForm always sorts byWeekday, so a
+    // different order genuinely is a different stored value).
+    expect(rowsMatch({ ...BASE, recurrenceRule: RULE }, { ...BASE, recurrenceRule: weekdayOrder })).toBe(false);
+  });
+});
+
 describe('rowsMatch — complexity inclusion', () => {
   test('returns false when complexity differs between known values', () => {
     expect(rowsMatch(

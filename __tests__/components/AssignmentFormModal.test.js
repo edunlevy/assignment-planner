@@ -43,6 +43,37 @@ function fillInput(tree, placeholder, value) {
   act(() => { input.props.onChangeText(value); });
 }
 
+// --- Stepper helper (RecurringSeriesSection's Every-N and count steppers) --
+// A Stepper renders <View>[Pressable(-), Text(value), Pressable(+)]</View>.
+// Locate the row by a substring of its value text (e.g. "1 week") and press
+// the minus/plus Pressable by position — the glyphs themselves ('−'/'+')
+// are shared by both steppers when both are on screen, so text-matching on
+// the glyph would be ambiguous.
+function collectText(node) {
+  if (typeof node === 'string') return node;
+  if (typeof node === 'number') return String(node);
+  if (!node || !node.children) return '';
+  return node.children.map(collectText).join('');
+}
+
+function pressStepperButton(root, valueSubstring, which) {
+  let target = null;
+  (function walk(n) {
+    if (target || !n || typeof n !== 'object') return;
+    if (Array.isArray(n)) { n.forEach(walk); return; }
+    if (n.type === 'View' && Array.isArray(n.children) && n.children.length === 3) {
+      const textChild = n.children.find(c => c && c.type === 'Text');
+      const pressables = n.children.filter(c => c && c.type === 'Pressable');
+      if (textChild && pressables.length === 2 && collectText(textChild).includes(valueSubstring)) {
+        target = pressables[which === 'minus' ? 0 : 1];
+      }
+    }
+    (n.children || []).forEach(walk);
+  })(root);
+  if (!target) throw new Error(`Stepper button ("${which}") not found for value containing "${valueSubstring}"`);
+  act(() => { target.props.onPress(); });
+}
+
 describe('AssignmentFormModal — create mode', () => {
   it('renders without crashing', () => {
     expect(() => render(React.createElement(AssignmentFormModal, makeProps()))).not.toThrow();
@@ -181,15 +212,18 @@ describe('AssignmentFormModal — create mode', () => {
     expect(onCreate.mock.calls[0][0].dueTime).toBe('14:30');
   });
 
-  it('creates a recurring series with the chosen interval and end date', async () => {
+  it('creates a recurring series with the chosen frequency/interval and end date (until-mode)', async () => {
     const onCreate = vi.fn(async () => {});
     const onCreateRecurring = vi.fn(async () => {});
     const screen = render(React.createElement(AssignmentFormModal, makeProps({ onCreate, onCreateRecurring })));
     await screen.flush();
     fillRequired(screen, { title: 'Weekly Quiz', course: 'CHEM 101' });
-    // Turn on recurring, choose the biweekly interval, set an end date.
-    screen.firePressOnText('Repeat until…');
-    screen.firePressOnText('Every 2 weeks');
+
+    // Turn on recurring (defaults: weekly, interval 1, until-mode) and bump
+    // the interval stepper from 1 week to 2 weeks.
+    screen.firePressOnText('Repeats…');
+    pressStepperButton(screen.toJSON(), '1 week', 'plus');
+
     screen.firePressOnText('Tap to choose an end date');
     act(() => { screen.getAllByType('DateTimePicker')[0].props.onChange({}, new Date(2026, 7, 1)); });
     screen.firePressOnText('Done');
@@ -199,8 +233,34 @@ describe('AssignmentFormModal — create mode', () => {
     // Recurring branch is exclusive — the one-off create path must not fire.
     expect(onCreate).not.toHaveBeenCalled();
     const [args] = onCreateRecurring.mock.calls[0];
-    expect(args.repeatInterval).toBe(2);
-    expect(args.repeatUntil).toBe('2026-08-01');
+    expect(args.rule).toEqual({
+      freq: 'weekly',
+      interval: 2,
+      end: { untilISO: '2026-08-01' },
+    });
+  });
+
+  it('creates a recurring series in count-mode with a monthly frequency and selected count', async () => {
+    const onCreateRecurring = vi.fn(async () => {});
+    const screen = render(React.createElement(AssignmentFormModal, makeProps({ onCreateRecurring })));
+    await screen.flush();
+    fillRequired(screen, { title: 'Monthly Report', course: 'BUS300' });
+
+    screen.firePressOnText('Repeats…');
+    screen.firePressOnText('Monthly');
+    screen.firePressOnText('After N times');
+    pressStepperButton(screen.toJSON(), '10 times', 'plus'); // 10 -> 11
+
+    screen.firePressOnText('Save Assignment');
+    await screen.flush();
+
+    expect(onCreateRecurring).toHaveBeenCalledOnce();
+    const [args] = onCreateRecurring.mock.calls[0];
+    expect(args.rule).toEqual({
+      freq: 'monthly',
+      interval: 1,
+      end: { count: 11 },
+    });
   });
 });
 
@@ -270,7 +330,7 @@ describe('AssignmentFormModal — edit mode', () => {
     const screen = render(React.createElement(AssignmentFormModal, makeProps({ editing: editingAssignment() })));
     await screen.flush();
     // Recurring toggle only shows in create mode
-    expect(screen.queryByText('Repeat weekly')).toBeNull();
+    expect(screen.queryByText('Repeats…')).toBeNull();
   });
 
   it('pressing Delete triggers Alert.alert', async () => {

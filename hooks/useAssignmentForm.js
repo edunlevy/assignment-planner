@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Alert, Platform } from 'react-native';
-import { validateAssignmentForm, EMPTY_ERRORS } from '../lib/formValidation';
+import { validateAssignmentForm, ruleFromForm, hasErrors, EMPTY_ERRORS } from '../lib/formValidation';
 
 export const IMPORTANCE_HINTS = {
   1: 'Low priority',
@@ -10,10 +10,23 @@ export const IMPORTANCE_HINTS = {
   5: 'Critical — do this first!',
 };
 
+// Repeat-section defaults, reset together whenever the toggle flips or the
+// modal is re-seeded. repeatCount's default of 10 is a starting point for
+// the count stepper, not a magic value.
+const EMPTY_REPEAT = {
+  repeatEnabled: false,
+  repeatFreq: 'weekly',       // 'weekly' | 'monthly'
+  repeatInterval: 1,          // every N weeks / months
+  repeatWeekdays: [],         // 0=Sun..6=Sat; empty = the start date's weekday
+  repeatEndMode: 'until',     // 'until' | 'count'
+  repeatUntil: '',
+  repeatCount: 10,
+};
+
 export const EMPTY_FORM = {
   title: '', course: '', dueDate: '', dueTime: '', importance: 3, status: 'not_started',
   complexity: 'medium',
-  repeatWeekly: false, repeatInterval: 1, repeatUntil: '',
+  ...EMPTY_REPEAT,
 };
 
 export function formFor(item) {
@@ -26,8 +39,7 @@ export function formFor(item) {
     importance: item.importance,
     status: item.status,
     complexity: item.complexity ?? 'medium',
-    repeatWeekly: false,
-    repeatUntil: '',
+    ...EMPTY_REPEAT,
   };
 }
 
@@ -68,12 +80,25 @@ export function useAssignmentForm({
   }
 
   function toggleRecurring() {
-    setForm(f => ({ ...f, repeatWeekly: !f.repeatWeekly, repeatInterval: 1, repeatUntil: '' }));
+    setForm(f => ({ ...f, ...EMPTY_REPEAT, repeatEnabled: !f.repeatEnabled }));
+  }
+
+  // Toggle one weekday (0=Sun..6=Sat) in the weekly-repeat weekday picker.
+  function toggleRepeatWeekday(day) {
+    setForm(f => ({
+      ...f,
+      repeatWeekdays: f.repeatWeekdays.includes(day)
+        ? f.repeatWeekdays.filter(d => d !== day)
+        : [...f.repeatWeekdays, day],
+    }));
   }
 
   async function handleSubmit() {
     const errors = validateAssignmentForm(form, { isEditing });
-    if (errors.title || errors.course || errors.dueDate || errors.dueTime || errors.repeatUntil) {
+    // hasErrors, not an enumerated key list: a hand-maintained list silently
+    // stops blocking submit the moment EMPTY_ERRORS gains a key it doesn't
+    // name (exactly what happened when repeatCount was added).
+    if (hasErrors(errors)) {
       setFieldErrors(errors);
       return;
     }
@@ -90,12 +115,10 @@ export function useAssignmentForm({
 
     if (isEditing) {
       await onUpdate(editing.id, { ...base, status: form.status });
-    } else if (form.repeatWeekly) {
-      await onCreateRecurring({
-        ...base,
-        repeatInterval: form.repeatInterval,
-        repeatUntil: form.repeatUntil.trim(),
-      });
+    } else if (form.repeatEnabled) {
+      // The rule is derived through the same ruleFromForm the validator
+      // used, so what gets built can't diverge from what was validated.
+      await onCreateRecurring({ ...base, rule: ruleFromForm(form) });
     } else {
       await onCreate({ ...base, status: 'not_started' });
     }
@@ -143,6 +166,7 @@ export function useAssignmentForm({
     handleChange,
     clearDueTime,
     toggleRecurring,
+    toggleRepeatWeekday,
     handleSubmit,
     handleDelete,
     handleDeleteSeries,
