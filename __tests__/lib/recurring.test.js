@@ -1,4 +1,4 @@
-import { MAX_OCCURRENCES, buildSeries, countOccurrences } from '../../lib/recurring';
+import { MAX_INTERVAL, MAX_OCCURRENCES, buildSeries, countOccurrences } from '../../lib/recurring';
 
 // All weekday/calendar-day claims below were verified against actual JS Date
 // arithmetic (new Date(y, m-1, d).getDay()), not assumed:
@@ -204,6 +204,37 @@ describe('MAX_OCCURRENCES cap', () => {
   test('countOccurrences caps at 53 for an open-ended until far in the future', () => {
     const rule = { freq: 'weekly', interval: 1, end: { untilISO: '2099-01-01' } };
     expect(countOccurrences('2026-01-05', rule)).toBe(53);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MAX_INTERVAL clamp: a stored rule is arbitrary jsonb read back from the DB
+// (F3b), so the generator must bound interval itself — unclamped, a huge
+// interval made the weekly day-scan effectively endless and overflowed Date
+// in the monthly branch (review finding on PR #41).
+// ---------------------------------------------------------------------------
+describe('MAX_INTERVAL clamp (untrusted stored rules)', () => {
+  test('MAX_INTERVAL is 12', () => {
+    expect(MAX_INTERVAL).toBe(12);
+  });
+
+  test('weekly interval above the cap is clamped to 12 and terminates', () => {
+    // 2026-01-05 (Mon) + 12 weeks = 2026-03-30 (Mon).
+    const atCap = seriesDates('2026-01-05', { freq: 'weekly', interval: 12, end: { count: 2 } });
+    expect(atCap).toEqual(['2026-01-05', '2026-03-30']);
+    expect(seriesDates('2026-01-05', { freq: 'weekly', interval: 1e9, end: { count: 2 } })).toEqual(atCap);
+  });
+
+  test('weekly interval Infinity/NaN normalizes to 1, not the cap (no sane nearest value for a non-finite input)', () => {
+    const weekly = ['2026-01-05', '2026-01-12'];
+    expect(seriesDates('2026-01-05', { freq: 'weekly', interval: Infinity, end: { count: 2 } })).toEqual(weekly);
+    expect(seriesDates('2026-01-05', { freq: 'weekly', interval: NaN, end: { count: 2 } })).toEqual(weekly);
+  });
+
+  test('monthly interval above the cap is clamped and cannot overflow Date', () => {
+    const atCap = seriesDates('2026-03-15', { freq: 'monthly', interval: 12, end: { count: 2 } });
+    expect(atCap).toEqual(['2026-03-15', '2027-03-15']);
+    expect(seriesDates('2026-03-15', { freq: 'monthly', interval: 1e9, end: { count: 2 } })).toEqual(atCap);
   });
 });
 

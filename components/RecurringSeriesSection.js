@@ -2,7 +2,7 @@ import { parseISO } from 'date-fns';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import DueDateField from './DueDateField';
 import { isValidDate } from '../lib/assignment';
-import { MAX_OCCURRENCES } from '../lib/recurring';
+import { MAX_INTERVAL, MAX_OCCURRENCES } from '../lib/recurring';
 import {
   PRIMARY,
   WHITE,
@@ -35,9 +35,9 @@ const WEEKDAYS = [
   { value: 6, label: 'S' },
 ];
 
-// Interval stepper bounds. 12 covers "once a quarter" in weeks and a full
-// year in months; anything wider is better expressed with a different tool.
-const MAX_INTERVAL = 12;
+// The interval stepper's bound is the generator's own MAX_INTERVAL (12 —
+// covers "once a quarter" in weeks and a full year in months), imported so
+// the UI clamp and the generator clamp can't drift apart.
 
 // A [-] value [+] stepper. Clamped; the buttons visually disable at the
 // bounds so the clamp is discoverable.

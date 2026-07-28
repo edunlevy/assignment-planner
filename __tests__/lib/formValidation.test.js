@@ -110,6 +110,10 @@ describe('ruleFromForm', () => {
   test('a valid integer repeatInterval >= 1 is passed through unchanged', () => {
     expect(ruleFromForm({ ...VALID_FORM, repeatInterval: 3, repeatUntil: '2026-10-01' }).interval).toBe(3);
   });
+
+  test('repeatInterval above MAX_INTERVAL is clamped — the persisted rule must be born valid', () => {
+    expect(ruleFromForm({ ...VALID_FORM, repeatInterval: 99, repeatUntil: '2026-10-01' }).interval).toBe(12);
+  });
 });
 
 // ---------------------------------------------------------------------------
