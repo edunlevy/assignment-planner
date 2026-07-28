@@ -133,14 +133,23 @@ export default function AssignmentFormModal({
 
             {!isEditing && (
               <RecurringSeriesSection
-                repeatWeekly={form.repeatWeekly}
+                repeatEnabled={form.repeatEnabled}
+                repeatFreq={form.repeatFreq}
                 repeatInterval={form.repeatInterval}
+                repeatWeekdays={form.repeatWeekdays}
+                repeatEndMode={form.repeatEndMode}
                 repeatUntil={form.repeatUntil}
+                repeatCount={form.repeatCount}
                 dueDate={form.dueDate}
                 repeatUntilError={fieldErrors.repeatUntil}
+                repeatCountError={fieldErrors.repeatCount}
                 onToggle={f.toggleRecurring}
+                onFreqChange={freq => f.handleChange('repeatFreq', freq)}
                 onIntervalChange={n => f.handleChange('repeatInterval', n)}
+                onWeekdayToggle={f.toggleRepeatWeekday}
+                onEndModeChange={mode => f.handleChange('repeatEndMode', mode)}
                 onRepeatUntilChange={iso => f.handleChange('repeatUntil', iso)}
+                onCountChange={n => f.handleChange('repeatCount', n)}
               />
             )}
 

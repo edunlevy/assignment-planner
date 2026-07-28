@@ -34,6 +34,20 @@ describe('useAssignmentForm — initial state', () => {
     expect(result.current.isEditing).toBe(false);
   });
 
+  it('EMPTY_FORM has the expected repeat-section defaults', () => {
+    expect(EMPTY_FORM).toEqual(
+      expect.objectContaining({
+        repeatEnabled: false,
+        repeatFreq: 'weekly',
+        repeatInterval: 1,
+        repeatWeekdays: [],
+        repeatEndMode: 'until',
+        repeatUntil: '',
+        repeatCount: 10,
+      })
+    );
+  });
+
   it('edit mode: form is pre-filled from the editing item', async () => {
     const editing = makeAssignment({
       title: 'Lab Report',
@@ -55,7 +69,7 @@ describe('useAssignmentForm — initial state', () => {
     expect(result.current.form.importance).toBe(4);
     expect(result.current.form.complexity).toBe('long');
     expect(result.current.form.status).toBe('in_progress');
-    expect(result.current.form.repeatWeekly).toBe(false);
+    expect(result.current.form.repeatEnabled).toBe(false);
     expect(result.current.isEditing).toBe(true);
   });
 });
@@ -175,7 +189,7 @@ describe('useAssignmentForm — handleSubmit', () => {
     });
   });
 
-  it('create (recurring): calls onCreateRecurring with base + repeatInterval/repeatUntil', async () => {
+  it('create (recurring, weekly/until-mode): calls onCreateRecurring with base + rule built by ruleFromForm', async () => {
     const onCreateRecurring = vi.fn(async () => {});
     const { result } = renderHook(() =>
       useAssignmentForm({ visible: true, editing: null, ...defaultCallbacks({ onCreateRecurring }) })
@@ -204,8 +218,43 @@ describe('useAssignmentForm — handleSubmit', () => {
       dueTime: null,
       importance: 3,
       complexity: 'medium',
-      repeatInterval: 2,
-      repeatUntil: '2026-08-01',
+      rule: {
+        freq: 'weekly',
+        interval: 2,
+        end: { untilISO: '2026-08-01' },
+      },
+    });
+  });
+
+  it('create (recurring, monthly + weekdays + count-mode): the rule reflects every repeat-* field', async () => {
+    const onCreateRecurring = vi.fn(async () => {});
+    const { result } = renderHook(() =>
+      useAssignmentForm({ visible: true, editing: null, ...defaultCallbacks({ onCreateRecurring }) })
+    );
+    await flushMicrotasks();
+
+    act(() => {
+      result.current.handleChange('title', 'Monthly Report');
+      result.current.handleChange('course', 'BUS300');
+      result.current.handleChange('dueDate', '2026-07-01');
+      result.current.toggleRecurring();
+    });
+    act(() => {
+      result.current.handleChange('repeatFreq', 'monthly');
+      // Weekdays should be ignored by ruleFromForm because freq is monthly.
+      result.current.toggleRepeatWeekday(1);
+      result.current.handleChange('repeatEndMode', 'count');
+      result.current.handleChange('repeatCount', 6);
+    });
+
+    await act(async () => { await result.current.handleSubmit(); });
+
+    expect(onCreateRecurring).toHaveBeenCalledOnce();
+    const [payload] = onCreateRecurring.mock.calls[0];
+    expect(payload.rule).toEqual({
+      freq: 'monthly',
+      interval: 1,
+      end: { count: 6 },
     });
   });
 
@@ -257,27 +306,107 @@ describe('useAssignmentForm — handleSubmit', () => {
     expect(cbs.onCreateRecurring).not.toHaveBeenCalled();
     expect(cbs.onUpdate).not.toHaveBeenCalled();
   });
+
+  // Regression test: handleSubmit's gate originally enumerated error keys
+  // by hand and omitted repeatCount, so an invalid count slipped through and
+  // onCreateRecurring fired with rule.end = { count: 0 } (buildSeries would
+  // then silently produce zero drafts). The gate now uses hasErrors, which
+  // can't drift when EMPTY_ERRORS gains a key. The UI stepper clamps at 1,
+  // so this path is only reachable programmatically — defense in depth.
+  it('invalid repeatCount (0) in count-mode blocks submit with a repeatCount error', async () => {
+    const cbs = defaultCallbacks();
+    const { result } = renderHook(() =>
+      useAssignmentForm({ visible: true, editing: null, ...cbs })
+    );
+    await flushMicrotasks();
+
+    act(() => {
+      result.current.handleChange('title', 'Weekly Quiz');
+      result.current.handleChange('course', 'CS101');
+      result.current.handleChange('dueDate', '2026-07-01');
+      result.current.toggleRecurring();
+    });
+    act(() => {
+      result.current.handleChange('repeatEndMode', 'count');
+      result.current.handleChange('repeatCount', 0); // invalid: must be >= 1
+    });
+
+    await act(async () => { await result.current.handleSubmit(); });
+
+    // This is what the spec promises and what actually fails today:
+    expect(cbs.onCreateRecurring).not.toHaveBeenCalled();
+    expect(result.current.fieldErrors.repeatCount).toBeTruthy();
+  });
 });
 
 describe('useAssignmentForm — toggleRecurring', () => {
-  it('flips repeatWeekly and resets repeatInterval/repeatUntil', async () => {
+  it('flips repeatEnabled and resets the whole repeat section back to defaults', async () => {
     const { result } = renderHook(() =>
       useAssignmentForm({ visible: true, editing: null, ...defaultCallbacks() })
     );
     await flushMicrotasks();
 
     act(() => {
-      result.current.handleChange('repeatInterval', 2);
+      result.current.handleChange('repeatFreq', 'monthly');
+      result.current.handleChange('repeatInterval', 3);
+      result.current.toggleRepeatWeekday(2);
+      result.current.handleChange('repeatEndMode', 'count');
       result.current.handleChange('repeatUntil', '2026-08-01');
+      result.current.handleChange('repeatCount', 20);
     });
     act(() => { result.current.toggleRecurring(); });
 
-    expect(result.current.form.repeatWeekly).toBe(true);
+    expect(result.current.form.repeatEnabled).toBe(true);
+    expect(result.current.form.repeatFreq).toBe('weekly');
     expect(result.current.form.repeatInterval).toBe(1);
+    expect(result.current.form.repeatWeekdays).toEqual([]);
+    expect(result.current.form.repeatEndMode).toBe('until');
     expect(result.current.form.repeatUntil).toBe('');
+    expect(result.current.form.repeatCount).toBe(10);
 
     act(() => { result.current.toggleRecurring(); });
-    expect(result.current.form.repeatWeekly).toBe(false);
+    expect(result.current.form.repeatEnabled).toBe(false);
+  });
+
+  it('resets in-progress repeat edits even when toggling off then on again', async () => {
+    const { result } = renderHook(() =>
+      useAssignmentForm({ visible: true, editing: null, ...defaultCallbacks() })
+    );
+    await flushMicrotasks();
+
+    act(() => { result.current.toggleRecurring(); }); // on
+    act(() => { result.current.handleChange('repeatInterval', 5); });
+    act(() => { result.current.toggleRecurring(); }); // off -> resets
+    act(() => { result.current.toggleRecurring(); }); // on again
+
+    expect(result.current.form.repeatInterval).toBe(1);
+  });
+});
+
+describe('useAssignmentForm — toggleRepeatWeekday', () => {
+  it('adds a weekday not yet selected', async () => {
+    const { result } = renderHook(() =>
+      useAssignmentForm({ visible: true, editing: null, ...defaultCallbacks() })
+    );
+    await flushMicrotasks();
+
+    act(() => { result.current.toggleRepeatWeekday(1); });
+    expect(result.current.form.repeatWeekdays).toEqual([1]);
+
+    act(() => { result.current.toggleRepeatWeekday(3); });
+    expect(result.current.form.repeatWeekdays).toEqual([1, 3]);
+  });
+
+  it('removes a weekday already selected', async () => {
+    const { result } = renderHook(() =>
+      useAssignmentForm({ visible: true, editing: null, ...defaultCallbacks() })
+    );
+    await flushMicrotasks();
+
+    act(() => { result.current.toggleRepeatWeekday(1); });
+    act(() => { result.current.toggleRepeatWeekday(3); });
+    act(() => { result.current.toggleRepeatWeekday(1); });
+    expect(result.current.form.repeatWeekdays).toEqual([3]);
   });
 });
 
