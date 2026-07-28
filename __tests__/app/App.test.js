@@ -238,6 +238,39 @@ describe('App', () => {
         expect(flatList.props.ListHeaderComponent.props.assignment.id).toBe('w');
       });
 
+      it("resets filters when the signed-in user changes, so user B never inherits user A's filters", async () => {
+        // AppScreen stays mounted across sign-out/sign-in (the !session
+        // branch is an early return, not an unmount), so filter state would
+        // survive an account switch without the userId-keyed reset effect —
+        // and a course filter matching nothing of B's would hide their whole
+        // list behind "No matches".
+        let authCallback;
+        supabase.auth.onAuthStateChange.mockImplementation(cb => {
+          authCallback = cb;
+          return { data: { subscription: { unsubscribe: vi.fn() } } };
+        });
+        const a = makeAssignment({ id: 'a', title: 'A Task', course: 'CS101', dueDate: '2026-06-20' });
+        const b = makeAssignment({ id: 'b', title: 'B Task', course: 'BIO150', dueDate: '2026-06-20' });
+        const screen = await renderLoggedIn({ assignments: [a, b] });
+
+        screen.firePressOnText('CS101');
+        let flatList = getFlatList(screen);
+        expect(flatList.props.data).toEqual([expect.objectContaining({ id: 'a' })]);
+
+        // Simulate the account switch through the real auth plumbing: the
+        // subscription handler useAuthSession registered receives a session
+        // for a different user id.
+        await act(async () => {
+          authCallback('SIGNED_IN', { user: { id: 'user-2', email: 'b@example.com' } });
+        });
+
+        flatList = getFlatList(screen);
+        expect(flatList.props.data).toEqual(expect.arrayContaining([
+          expect.objectContaining({ id: 'a' }),
+          expect.objectContaining({ id: 'b' }),
+        ]));
+      });
+
       it('shows the no-matches state when filters exclude every assignment, and clearing restores the list', async () => {
         const item = makeAssignment({ title: 'Only Item', course: 'CS101', dueDate: '2026-06-20' });
         const screen = await renderLoggedIn({ assignments: [item] });

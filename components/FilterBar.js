@@ -68,6 +68,13 @@ export default function FilterBar({ filters, courses, onChange }) {
       horizontal
       showsHorizontalScrollIndicator={false}
       className="px-4 mb-3"
+      // RN's base style for horizontal ScrollViews includes flexGrow: 1
+      // (ScrollView.js styles.baseHorizontal). Inside App.js's flex-column
+      // container that would make the chip bar and the FlatList split the
+      // free vertical space as equal growable siblings — a several-hundred-
+      // pixel chip band whenever the list is short. Pin it to its content
+      // height.
+      style={{ flexGrow: 0, flexShrink: 0 }}
       contentContainerStyle={{ alignItems: 'center', paddingRight: 16 }}
     >
       {DUE_OPTIONS.map(opt => (

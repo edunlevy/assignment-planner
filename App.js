@@ -70,6 +70,16 @@ function AppScreen() {
   }, []);
 
   const userId = session?.user?.id ?? null;
+
+  // Filters are per-account view state, but AppScreen stays mounted across
+  // sign-out (the !session branch below is an early return, not an unmount),
+  // so without this reset user B would inherit user A's filters — and a
+  // course filter that matches nothing of B's silently hides their whole
+  // list behind "No matches".
+  useEffect(() => {
+    setFilters(emptyFilters());
+  }, [userId]);
+
   const {
     assignments,
     loaded,

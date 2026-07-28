@@ -14,6 +14,21 @@ describe('FilterBar', () => {
     }))).not.toThrow();
   });
 
+  it('pins the ScrollView to its content height (flexGrow/flexShrink 0)', () => {
+    // Layout regression guard: RN's base style for horizontal ScrollViews is
+    // flexGrow: 1, which would make the chip bar split App.js's free vertical
+    // space 50/50 with the FlatList whenever the list is short. No layout
+    // engine runs in these tests, so asserting the style override is the only
+    // way to pin this.
+    const screen = render(React.createElement(FilterBar, {
+      filters: emptyFilters(),
+      courses: COURSES,
+      onChange: vi.fn(),
+    }));
+    const [scrollView] = screen.getAllByType('ScrollView');
+    expect(scrollView.props.style).toMatchObject({ flexGrow: 0, flexShrink: 0 });
+  });
+
   it('renders the four due-range chips', () => {
     const screen = render(React.createElement(FilterBar, {
       filters: emptyFilters(),
