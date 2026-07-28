@@ -503,12 +503,13 @@ describe('dbUpdateSeriesFrom', () => {
     importance: 4,
     complexity: 'long',
     dueTime: '09:00',
+    status: 'in_progress',
   };
 
   test('calls update_series_from with the exact mapped payload (course -> p_class_name)', async () => {
     supabase.rpc.mockResolvedValueOnce({ data: [], error: null });
 
-    await dbUpdateSeriesFrom('series-1', '2026-06-15', 2, BASE);
+    await dbUpdateSeriesFrom('series-1', '2026-06-15', 2, 'target-1', BASE);
 
     expect(supabase.rpc).toHaveBeenCalledWith('update_series_from', {
       p_series_id: 'series-1',
@@ -519,13 +520,15 @@ describe('dbUpdateSeriesFrom', () => {
       p_importance: 4,
       p_complexity: 'long',
       p_due_time: '09:00',
+      p_target_id: 'target-1',
+      p_status: 'in_progress',
     });
   });
 
   test('null-coalesces a missing/undefined dueTime to p_due_time: null', async () => {
     supabase.rpc.mockResolvedValueOnce({ data: [], error: null });
 
-    await dbUpdateSeriesFrom('series-1', '2026-06-15', 0, { ...BASE, dueTime: undefined });
+    await dbUpdateSeriesFrom('series-1', '2026-06-15', 0, 'target-1', { ...BASE, dueTime: undefined });
 
     expect(supabase.rpc).toHaveBeenCalledWith(
       'update_series_from',
@@ -536,7 +539,7 @@ describe('dbUpdateSeriesFrom', () => {
   test('a null dueTime on base also maps to p_due_time: null', async () => {
     supabase.rpc.mockResolvedValueOnce({ data: [], error: null });
 
-    await dbUpdateSeriesFrom('series-1', '2026-06-15', 0, { ...BASE, dueTime: null });
+    await dbUpdateSeriesFrom('series-1', '2026-06-15', 0, 'target-1', { ...BASE, dueTime: null });
 
     expect(supabase.rpc).toHaveBeenCalledWith(
       'update_series_from',
@@ -559,7 +562,7 @@ describe('dbUpdateSeriesFrom', () => {
     ];
     supabase.rpc.mockResolvedValueOnce({ data: rows, error: null });
 
-    const result = await dbUpdateSeriesFrom('series-1', '2026-06-15', 2, BASE);
+    const result = await dbUpdateSeriesFrom('series-1', '2026-06-15', 2, 'target-1', BASE);
 
     expect(result).toEqual([
       {
@@ -578,7 +581,7 @@ describe('dbUpdateSeriesFrom', () => {
   test('null data resolves to []', async () => {
     supabase.rpc.mockResolvedValueOnce({ data: null, error: null });
 
-    const result = await dbUpdateSeriesFrom('series-1', '2026-06-15', 0, BASE);
+    const result = await dbUpdateSeriesFrom('series-1', '2026-06-15', 0, 'target-1', BASE);
 
     expect(result).toEqual([]);
   });
@@ -587,7 +590,7 @@ describe('dbUpdateSeriesFrom', () => {
     supabase.rpc.mockResolvedValueOnce({ data: null, error: { message: 'rpc failed' } });
 
     await expect(
-      dbUpdateSeriesFrom('series-1', '2026-06-15', 0, BASE)
+      dbUpdateSeriesFrom('series-1', '2026-06-15', 0, 'target-1', BASE)
     ).rejects.toEqual({ message: 'rpc failed' });
   });
 });

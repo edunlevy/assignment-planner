@@ -130,22 +130,25 @@ export function useAssignmentForm({
   }
 
   // Saving an edit to a series row asks which occurrences it applies to.
-  // "This and future" passes `base` WITHOUT status — each occurrence keeps
-  // its own completion state — while "just this one" keeps the current
-  // single-row behavior including the status field. On web, Alert.alert
-  // renders no actionable buttons, so window.confirm chooses between the
-  // two scopes (OK = this and future, Cancel = just this one) — the
-  // binary-confirm limitation matches handleDeleteSeries below; backing out
-  // entirely on web means closing the modal without saving.
+  // Both scopes include the status field: for "this and future" the status
+  // applies ONLY to the edited row (the user was looking at its status
+  // picker when they saved; discarding it would silently revert a visible
+  // edit) while the rest of the tail keeps each occurrence's own completion
+  // state — that split lives in the update_series_from RPC. On web,
+  // Alert.alert renders no actionable buttons, so window.confirm chooses
+  // between the two scopes (OK = this and future, Cancel = just this one) —
+  // the binary-confirm limitation matches handleDeleteSeries below; backing
+  // out entirely on web means closing the modal without saving.
   function chooseSeriesEditScope(base) {
+    const withStatus = { ...base, status: form.status };
     if (Platform.OS === 'web') {
       // eslint-disable-next-line no-alert
       const applyToFuture = window.confirm(
         'Apply this change to this and all future occurrences? Cancel applies it to just this one.'
       );
       return applyToFuture
-        ? onUpdateSeries(editing.id, base)
-        : onUpdate(editing.id, { ...base, status: form.status });
+        ? onUpdateSeries(editing.id, withStatus)
+        : onUpdate(editing.id, withStatus);
     }
     return new Promise(resolve => {
       Alert.alert(
@@ -155,11 +158,11 @@ export function useAssignmentForm({
           { text: 'Cancel', style: 'cancel', onPress: () => resolve() },
           {
             text: 'Just this one',
-            onPress: () => resolve(onUpdate(editing.id, { ...base, status: form.status })),
+            onPress: () => resolve(onUpdate(editing.id, withStatus)),
           },
           {
             text: 'This & future',
-            onPress: () => resolve(onUpdateSeries(editing.id, base)),
+            onPress: () => resolve(onUpdateSeries(editing.id, withStatus)),
           },
         ],
         // Android can dismiss without a button tap (back button / tap

@@ -542,21 +542,51 @@ export function useAssignments(userId) {
       .map(a => a.id);
 
     const batchWork = async () => {
-      const updatedRows = await dbUpdateSeriesFrom(target.seriesId, fromDate, dayDelta, changes);
+      const updatedRows = await dbUpdateSeriesFrom(target.seriesId, fromDate, dayDelta, target.id, changes);
+
+      // Settle every signature up front, before any scheduling I/O — the
+      // markers share one TTL clock, so starting them together maximizes
+      // the window in which the N realtime echoes (queued behind this
+      // batch) are still recognized as our own.
+      for (const row of updatedRows) settleSelfMutation(row.id, row);
 
       const withRemindersById = {};
-      for (const row of updatedRows) {
-        settleSelfMutation(row.id, row);
-        // Sequential on purpose: scheduleFor serializes on the per-user
-        // reminder-map lock anyway, and 52 parallel calls would just queue.
-        // eslint-disable-next-line no-await-in-loop
-        const reminderIds = await reminders.scheduleFor(row);
-        // eslint-disable-next-line no-await-in-loop
-        await calendarScheduleFor(row);
-        withRemindersById[row.id] = { ...row, reminderIds };
+      try {
+        for (const row of updatedRows) {
+          // Reminder/calendar mirrors are best-effort: a scheduling failure
+          // on one row must not abort the rest of the tail — the DB update
+          // already landed, and dropping the commit would leave rows whose
+          // echoes are suppressed AND whose state never updated, i.e. a
+          // divergence only a full refetch could heal.
+          let reminderIds = [];
+          try {
+            // Sequential on purpose: scheduleFor serializes on the per-user
+            // reminder-map lock anyway, and 52 parallel calls would just queue.
+            // eslint-disable-next-line no-await-in-loop
+            reminderIds = await reminders.scheduleFor(row);
+            // eslint-disable-next-line no-await-in-loop
+            await calendarScheduleFor(row);
+          } catch (e) {
+            console.warn('[updateSeriesFrom] rescheduling failed for row', row.id, e);
+          }
+          withRemindersById[row.id] = { ...row, reminderIds };
+        }
+      } finally {
+        // Commit whatever accumulated even if the loop aborted unexpectedly
+        // — every DB-updated row with a settled signature MUST reach state.
+        // UPSERT, not map: the server's WHERE is authoritative and can
+        // return rows this device hasn't seen yet (created on another
+        // device); prev.map would silently drop them while their settled
+        // signatures suppress the very echoes that would have delivered
+        // them — invisible rows until a full refetch.
+        commitLocal(prev => {
+          const seen = new Set(prev.map(a => a.id));
+          const added = updatedRows
+            .filter(r => !seen.has(r.id) && withRemindersById[r.id])
+            .map(r => withRemindersById[r.id]);
+          return [...added, ...prev.map(a => withRemindersById[a.id] ?? a)];
+        });
       }
-
-      commitLocal(prev => prev.map(a => withRemindersById[a.id] ?? a));
       return updatedRows.length;
     };
 

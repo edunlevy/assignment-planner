@@ -408,12 +408,19 @@ describe('useAssignmentForm — chooseSeriesEditScope (native, editing a series 
     expect(onUpdateSeries).not.toHaveBeenCalled();
   });
 
-  it('"This & future" calls onUpdateSeries(editing.id, base) — NO status field', async () => {
+  it('"This & future" calls onUpdateSeries(editing.id, {...base, status}) — status INCLUDED, applied by the RPC to the target row only', async () => {
+    // Regression (PR #42 review): the first version sent bare `base`, which
+    // silently discarded a status change on the very row the user was
+    // editing — the picker snapped back after save. The status now rides
+    // along and update_series_from applies it to p_target_id alone; the
+    // rest of the tail still keeps each occurrence's own status.
     const { onUpdate, onUpdateSeries, editing } = seriesEditingSetup();
     const { result } = renderHook(() =>
       useAssignmentForm({ visible: true, editing, ...defaultCallbacks({ onUpdate, onUpdateSeries }) })
     );
     await flushMicrotasks();
+
+    act(() => { result.current.handleChange('status', 'completed'); });
 
     let submitPromise;
     act(() => { submitPromise = result.current.handleSubmit(); });
@@ -429,10 +436,8 @@ describe('useAssignmentForm — chooseSeriesEditScope (native, editing a series 
       dueTime: null,
       importance: 3,
       complexity: 'medium',
+      status: 'completed',
     });
-    // No status field at all, not even undefined-carrying — the whole point
-    // of the "future" branch is every occurrence keeps its own status.
-    expect(onUpdateSeries.mock.calls[0][1]).not.toHaveProperty('status');
     expect(onUpdate).not.toHaveBeenCalled();
   });
 
@@ -492,7 +497,7 @@ describe('useAssignmentForm — chooseSeriesEditScope (web, editing a series row
 
   // Platform.OS / globalThis.window juggling copied from the
   // handleDelete web-confirm tests in ProfileModal.test.js.
-  it('OK (confirm accepted) calls onUpdateSeries with base — NO status field', async () => {
+  it('OK (confirm accepted) calls onUpdateSeries with {...base, status} — RPC applies status to the target row only', async () => {
     const originalOS = Platform.OS;
     const prevWindow = globalThis.window;
     const confirm = vi.fn(() => true);
@@ -516,6 +521,7 @@ describe('useAssignmentForm — chooseSeriesEditScope (web, editing a series row
         dueTime: null,
         importance: 3,
         complexity: 'medium',
+        status: 'in_progress',
       });
       expect(onUpdate).not.toHaveBeenCalled();
     } finally {

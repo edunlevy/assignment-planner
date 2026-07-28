@@ -549,8 +549,9 @@ describe('updateSeriesFrom', () => {
     };
 
     // Server returns the 3 affected rows (Week 1/2/3), each shifted by the
-    // 2-day delta (2026-06-01 -> 2026-06-03) and carrying the new base fields.
-    dbUpdateSeriesFrom.mockImplementation(async (seriesId, fromDate, dayDelta, base) => (
+    // 2-day delta (2026-06-01 -> 2026-06-03) and carrying the new base
+    // fields; status lands only on the target row (the RPC's CASE).
+    dbUpdateSeriesFrom.mockImplementation(async (seriesId, fromDate, dayDelta, targetId, base) => (
       [rows['Week 1'], rows['Week 2'], rows['Week 3']].map(r => ({
         ...r,
         title: base.title,
@@ -558,6 +559,7 @@ describe('updateSeriesFrom', () => {
         importance: base.importance,
         complexity: base.complexity,
         dueTime: base.dueTime,
+        ...(r.id === targetId ? { status: base.status } : {}),
         dueDate: format(addDays(parseISO(r.dueDate), dayDelta), 'yyyy-MM-dd'),
       }))
     ));
@@ -568,7 +570,7 @@ describe('updateSeriesFrom', () => {
     });
 
     expect(count).toBe(3);
-    expect(dbUpdateSeriesFrom).toHaveBeenCalledWith(SERIES_ID, '2026-06-01', 2, changes);
+    expect(dbUpdateSeriesFrom).toHaveBeenCalledWith(SERIES_ID, '2026-06-01', 2, target.id, changes);
 
     const byId = Object.fromEntries(result.current.assignments.map(a => [a.id, a]));
 
@@ -596,10 +598,11 @@ describe('updateSeriesFrom', () => {
       await result.current.updateSeriesFrom(target.id, { ...VALID_DRAFT, dueDate: '2026-06-17' });
     });
 
-    const [seriesIdArg, fromDateArg, dayDeltaArg] = dbUpdateSeriesFrom.mock.calls[0];
+    const [seriesIdArg, fromDateArg, dayDeltaArg, targetIdArg] = dbUpdateSeriesFrom.mock.calls[0];
     expect(seriesIdArg).toBe(SERIES_ID);
     expect(fromDateArg).toBe('2026-06-15');
     expect(dayDeltaArg).toBe(2);
+    expect(targetIdArg).toBe(target.id);
   });
 
   test('schedules reminders and calendar events exactly once per row returned by dbUpdateSeriesFrom', async () => {
@@ -712,6 +715,87 @@ describe('updateSeriesFrom', () => {
     expect(byId[rows['Week 1'].id].recurrenceRule).toEqual(RULE);
     expect(byId[rows['Week 2'].id].recurrenceRule).toEqual(RULE);
     expect(byId[rows['Week 3'].id].recurrenceRule).toEqual(RULE);
+  });
+
+  test('UPSERTS server rows this device has never seen (created remotely), instead of dropping them while their echoes are suppressed', async () => {
+    // The server's WHERE is authoritative: a row added to the series tail on
+    // another device can come back from the RPC before this device's
+    // realtime INSERT for it has been processed. prev.map alone would drop
+    // it from the commit — while its settled signature suppresses the very
+    // echo that would have delivered it — leaving it invisible until a full
+    // refetch (review finding on PR #42).
+    const { result } = await mountHook();
+    const rows = await seedSeriesWithEarlierRow(result);
+    const target = rows['Week 3'];
+
+    const remoteRow = {
+      ...VALID_DRAFT,
+      id: 'remote-week-4',
+      title: 'Week 4 (added remotely)',
+      dueDate: '2026-06-24',
+      seriesId: SERIES_ID,
+    };
+    dbUpdateSeriesFrom.mockResolvedValue([
+      { ...target, dueDate: '2026-06-17' },
+      { ...remoteRow, dueDate: '2026-06-26' },
+    ]);
+
+    await act(async () => {
+      await result.current.updateSeriesFrom(target.id, { ...VALID_DRAFT, dueDate: '2026-06-17' });
+    });
+
+    const byId = Object.fromEntries(result.current.assignments.map(a => [a.id, a]));
+    expect(byId['remote-week-4']).toBeTruthy();
+    expect(byId['remote-week-4'].dueDate).toBe('2026-06-26');
+    expect(byId[target.id].dueDate).toBe('2026-06-17');
+  });
+
+  test('a scheduling failure on one row does not abort the rest of the tail or the state commit', async () => {
+    // The DB update has already landed by the time scheduling runs; aborting
+    // the commit would leave DB-updated rows with settled (echo-suppressing)
+    // signatures that never reach local state — stale until a full refetch
+    // (review finding on PR #42). Reminder/calendar mirrors are best-effort.
+    const { result } = await mountHook();
+    const rows = await seedSeriesWithEarlierRow(result);
+    const target = rows['Week 1'];
+
+    const updatedRows = [
+      { ...rows['Week 1'], dueDate: '2026-06-03' },
+      { ...rows['Week 2'], dueDate: '2026-06-10' },
+      { ...rows['Week 3'], dueDate: '2026-06-17' },
+    ];
+    dbUpdateSeriesFrom.mockResolvedValue(updatedRows);
+
+    // Force a genuine per-row throw through the calendar path: reminder
+    // scheduling swallows its own native errors (lib/notifications.js), but
+    // calendarScheduleFor's ensureAssignmentCalendar propagates — enable
+    // sync, then make the calendar-list call blow up for every row.
+    await act(async () => { await result.current.enableCalendarSync(); });
+    // Per-row throw path: each row's event exists (backfilled above), so
+    // scheduleFor tries updateEventFor first — make it fail (its internal
+    // catch returns false, the "event deleted externally" signal) so
+    // scheduleFor falls through to ensureAssignmentCalendar, whose
+    // getCalendarsAsync rejection propagates OUT of scheduleFor. All mocks
+    // are Once-scoped and fully consumed (3 rows × one call each) so
+    // nothing leaks into later tests in this file.
+    const eventKitError = new Error('EventKit says no');
+    Calendar.updateEventAsync
+      .mockRejectedValueOnce(eventKitError)
+      .mockRejectedValueOnce(eventKitError)
+      .mockRejectedValueOnce(eventKitError);
+    Calendar.getCalendarsAsync
+      .mockRejectedValueOnce(eventKitError)
+      .mockRejectedValueOnce(eventKitError)
+      .mockRejectedValueOnce(eventKitError);
+
+    await act(async () => {
+      await result.current.updateSeriesFrom(target.id, { ...VALID_DRAFT, dueDate: '2026-06-03' });
+    });
+
+    const byId = Object.fromEntries(result.current.assignments.map(a => [a.id, a]));
+    expect(byId[rows['Week 1'].id].dueDate).toBe('2026-06-03');
+    expect(byId[rows['Week 2'].id].dueDate).toBe('2026-06-10');
+    expect(byId[rows['Week 3'].id].dueDate).toBe('2026-06-17');
   });
 });
 
