@@ -14,7 +14,9 @@ import AssignmentFormModal from './components/AssignmentFormModal';
 import AssignmentRow from './components/AssignmentRow';
 import CalendarView from './components/CalendarView';
 import EmptyState from './components/EmptyState';
+import FilterBar from './components/FilterBar';
 import WorkOnNextCard from './components/WorkOnNextCard';
+import { applyFilters, distinctCourses, emptyFilters } from './lib/filtering';
 import { pickWorkOnNext, sortForList } from './lib/ordering';
 import { useAssignments } from './hooks/useAssignments';
 import { useAuthSession } from './hooks/useAuthSession';
@@ -47,6 +49,8 @@ function AppScreen() {
   const [modalVisible, setModalVisible] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [saving, setSaving] = useState(false);
+  // Session-only: no persistence across app restarts.
+  const [filters, setFilters] = useState(emptyFilters());
 
   // Monotonic counter that increments every 60 s and on every app-foreground
   // event. Including it in the useMemo dependency array below ensures that
@@ -66,6 +70,16 @@ function AppScreen() {
   }, []);
 
   const userId = session?.user?.id ?? null;
+
+  // Filters are per-account view state, but AppScreen stays mounted across
+  // sign-out (the !session branch below is an early return, not an unmount),
+  // so without this reset user B would inherit user A's filters — and a
+  // course filter that matches nothing of B's silently hides their whole
+  // list behind "No matches".
+  useEffect(() => {
+    setFilters(emptyFilters());
+  }, [userId]);
+
   const {
     assignments,
     loaded,
@@ -172,11 +186,19 @@ function AppScreen() {
     const now = new Date();
     const incompleteCount = assignments.filter(a => a.status !== 'completed').length;
     return {
-      sorted: sortForList(assignments),
+      // Filtering narrows what's displayed only — workOnNext/incompleteCount
+      // stay derived from the unfiltered list so the recommendation and
+      // header count never change just because the view is filtered.
+      sorted: sortForList(applyFilters(assignments, filters, now)),
       workOnNext: pickWorkOnNext(assignments, now, ranking),
       incompleteCount,
     };
-  }, [assignments, clockTick, ranking]);
+  }, [assignments, clockTick, ranking, filters]);
+
+  // Course chip options for the filter bar, derived from the full
+  // (unfiltered) assignment set so a selected course chip doesn't disappear
+  // once it narrows the list.
+  const courseOptions = useMemo(() => distinctCourses(assignments), [assignments]);
 
   const editing = editingId ? assignments.find(a => a.id === editingId) ?? null : null;
 
@@ -241,16 +263,29 @@ function AppScreen() {
       ) : null}
 
       {viewMode === 'list' ? (
-        <FlatList
-          data={sorted}
-          keyExtractor={item => item.id}
-          renderItem={({ item }) => (
-            <AssignmentRow item={item} onPress={() => openEditModal(item)} />
+        <>
+          {assignments.length > 0 && (
+            <FilterBar filters={filters} courses={courseOptions} onChange={setFilters} />
           )}
-          ListHeaderComponent={workOnNext ? <WorkOnNextCard assignment={workOnNext} ranking={ranking} /> : null}
-          contentContainerStyle={[styles.list, sorted.length === 0 && styles.listEmpty]}
-          ListEmptyComponent={<EmptyState />}
-        />
+          <FlatList
+            data={sorted}
+            keyExtractor={item => item.id}
+            renderItem={({ item }) => (
+              <AssignmentRow item={item} onPress={() => openEditModal(item)} />
+            )}
+            // workOnNext is deliberately unfiltered, but recommending an
+            // assignment directly above "No matches" reads as a
+            // self-contradiction — suppress the card when filters (or an
+            // empty account) leave nothing visible below it.
+            ListHeaderComponent={workOnNext && sorted.length > 0 ? <WorkOnNextCard assignment={workOnNext} ranking={ranking} /> : null}
+            contentContainerStyle={[styles.list, sorted.length === 0 && styles.listEmpty]}
+            ListEmptyComponent={
+              assignments.length > 0 && sorted.length === 0
+                ? <EmptyState variant="noMatches" onClear={() => setFilters(emptyFilters())} />
+                : <EmptyState />
+            }
+          />
+        </>
       ) : (
         <CalendarView
           assignments={assignments}

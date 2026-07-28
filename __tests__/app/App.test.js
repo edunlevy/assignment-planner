@@ -202,5 +202,133 @@ describe('App', () => {
       }
       expect(findBanner(root)).toBeNull();
     });
+
+    describe('filtering', () => {
+      it('narrows the visible list without changing the Work-on-next card or header count', async () => {
+        // Due today and high-importance: pickWorkOnNext picks this one under
+        // the default ranking regardless of which course filter is later applied.
+        const workOnNextItem = makeAssignment({
+          id: 'w', title: 'Urgent Essay', course: 'CS101', dueDate: '2026-06-15', importance: 5,
+        });
+        const other = makeAssignment({
+          id: 'o', title: 'Other Course Reading', course: 'MATH201', dueDate: '2026-07-01',
+        });
+        const screen = await renderLoggedIn({ assignments: [workOnNextItem, other] });
+
+        // Sanity check before any filter is applied: both rows are in the
+        // FlatList's data, the header count reflects both, and the
+        // Work-on-next card (FlatList's ListHeaderComponent) shows the urgent one.
+        let flatList = getFlatList(screen);
+        expect(flatList.props.data).toEqual(expect.arrayContaining([
+          expect.objectContaining({ id: 'w' }),
+          expect.objectContaining({ id: 'o' }),
+        ]));
+        expect(screen.getByText('2 remaining')).toBeTruthy();
+        expect(flatList.props.ListHeaderComponent.props.assignment.id).toBe('w');
+
+        // Select the CS101 course chip (rendered by FilterBar, a real part of
+        // the tree — unlike FlatList's data/props, chip taps actually re-render).
+        screen.firePressOnText('CS101');
+
+        flatList = getFlatList(screen);
+        expect(flatList.props.data).toEqual([expect.objectContaining({ id: 'w' })]);
+        // workOnNext and the header count are derived from the UNFILTERED
+        // assignments list, so neither should change.
+        expect(screen.getByText('2 remaining')).toBeTruthy();
+        expect(flatList.props.ListHeaderComponent.props.assignment.id).toBe('w');
+      });
+
+      it("resets filters when the signed-in user changes, so user B never inherits user A's filters", async () => {
+        // AppScreen stays mounted across sign-out/sign-in (the !session
+        // branch is an early return, not an unmount), so filter state would
+        // survive an account switch without the userId-keyed reset effect —
+        // and a course filter matching nothing of B's would hide their whole
+        // list behind "No matches".
+        let authCallback;
+        supabase.auth.onAuthStateChange.mockImplementation(cb => {
+          authCallback = cb;
+          return { data: { subscription: { unsubscribe: vi.fn() } } };
+        });
+        const a = makeAssignment({ id: 'a', title: 'A Task', course: 'CS101', dueDate: '2026-06-20' });
+        const b = makeAssignment({ id: 'b', title: 'B Task', course: 'BIO150', dueDate: '2026-06-20' });
+        const screen = await renderLoggedIn({ assignments: [a, b] });
+
+        screen.firePressOnText('CS101');
+        let flatList = getFlatList(screen);
+        expect(flatList.props.data).toEqual([expect.objectContaining({ id: 'a' })]);
+
+        // Simulate the account switch through the real auth plumbing: the
+        // subscription handler useAuthSession registered receives a session
+        // for a different user id.
+        await act(async () => {
+          authCallback('SIGNED_IN', { user: { id: 'user-2', email: 'b@example.com' } });
+        });
+
+        flatList = getFlatList(screen);
+        expect(flatList.props.data).toHaveLength(2);
+        expect(flatList.props.data).toEqual(expect.arrayContaining([
+          expect.objectContaining({ id: 'a' }),
+          expect.objectContaining({ id: 'b' }),
+        ]));
+      });
+
+      it('keeps filters across a token refresh for the SAME user (reset keys on userId, not session identity)', async () => {
+        // Supabase fires onAuthStateChange with a FRESH session object on
+        // TOKEN_REFRESHED and on app foreground, and useAuthSession calls
+        // setSession every time. Keying the reset effect on `session` instead
+        // of `userId` would therefore wipe the user's filters mid-use on a
+        // timer — this pins the dep-array choice the account-switch test
+        // above can't distinguish.
+        let authCallback;
+        supabase.auth.onAuthStateChange.mockImplementation(cb => {
+          authCallback = cb;
+          return { data: { subscription: { unsubscribe: vi.fn() } } };
+        });
+        const a = makeAssignment({ id: 'a', title: 'A Task', course: 'CS101', dueDate: '2026-06-20' });
+        const b = makeAssignment({ id: 'b', title: 'B Task', course: 'BIO150', dueDate: '2026-06-20' });
+        const screen = await renderLoggedIn({ assignments: [a, b] });
+
+        screen.firePressOnText('CS101');
+        let flatList = getFlatList(screen);
+        expect(flatList.props.data).toEqual([expect.objectContaining({ id: 'a' })]);
+
+        // Same user id, new session object identity.
+        await act(async () => {
+          authCallback('TOKEN_REFRESHED', { user: { id: 'user-1', email: 'test@example.com' } });
+        });
+
+        flatList = getFlatList(screen);
+        expect(flatList.props.data).toEqual([expect.objectContaining({ id: 'a' })]);
+      });
+
+      it('shows the no-matches state when filters exclude every assignment, and clearing restores the list', async () => {
+        const item = makeAssignment({ title: 'Only Item', course: 'CS101', dueDate: '2026-06-20' });
+        const screen = await renderLoggedIn({ assignments: [item] });
+
+        // "Today" excludes this item: it's due 2026-06-20, five days after
+        // FIXED_NOW (2026-06-15), so the due-range filter alone empties the list.
+        screen.firePressOnText('Today');
+
+        let flatList = getFlatList(screen);
+        expect(flatList.props.data).toEqual([]);
+        // FlatList's ListEmptyComponent prop is never auto-rendered by the
+        // mocked FlatList host tag, so assert on the element itself.
+        expect(flatList.props.ListEmptyComponent.props.variant).toBe('noMatches');
+        // The Work-on-next card is suppressed alongside "No matches" — a
+        // recommendation directly above "nothing matches" reads as a
+        // self-contradiction (workOnNext itself is unfiltered by design).
+        expect(flatList.props.ListHeaderComponent).toBeNull();
+
+        // Firing the noMatches variant's onClear (as App.js wires it) should
+        // reset filters and bring the item back into view.
+        await act(async () => {
+          flatList.props.ListEmptyComponent.props.onClear();
+        });
+
+        flatList = getFlatList(screen);
+        expect(flatList.props.data).toEqual([expect.objectContaining({ title: 'Only Item' })]);
+        expect(flatList.props.ListEmptyComponent.props.variant).toBeUndefined();
+      });
+    });
   });
 });
