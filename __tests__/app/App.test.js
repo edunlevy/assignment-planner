@@ -202,5 +202,66 @@ describe('App', () => {
       }
       expect(findBanner(root)).toBeNull();
     });
+
+    describe('filtering', () => {
+      it('narrows the visible list without changing the Work-on-next card or header count', async () => {
+        // Due today and high-importance: pickWorkOnNext picks this one under
+        // the default ranking regardless of which course filter is later applied.
+        const workOnNextItem = makeAssignment({
+          id: 'w', title: 'Urgent Essay', course: 'CS101', dueDate: '2026-06-15', importance: 5,
+        });
+        const other = makeAssignment({
+          id: 'o', title: 'Other Course Reading', course: 'MATH201', dueDate: '2026-07-01',
+        });
+        const screen = await renderLoggedIn({ assignments: [workOnNextItem, other] });
+
+        // Sanity check before any filter is applied: both rows are in the
+        // FlatList's data, the header count reflects both, and the
+        // Work-on-next card (FlatList's ListHeaderComponent) shows the urgent one.
+        let flatList = getFlatList(screen);
+        expect(flatList.props.data).toEqual(expect.arrayContaining([
+          expect.objectContaining({ id: 'w' }),
+          expect.objectContaining({ id: 'o' }),
+        ]));
+        expect(screen.getByText('2 remaining')).toBeTruthy();
+        expect(flatList.props.ListHeaderComponent.props.assignment.id).toBe('w');
+
+        // Select the CS101 course chip (rendered by FilterBar, a real part of
+        // the tree — unlike FlatList's data/props, chip taps actually re-render).
+        screen.firePressOnText('CS101');
+
+        flatList = getFlatList(screen);
+        expect(flatList.props.data).toEqual([expect.objectContaining({ id: 'w' })]);
+        // workOnNext and the header count are derived from the UNFILTERED
+        // assignments list, so neither should change.
+        expect(screen.getByText('2 remaining')).toBeTruthy();
+        expect(flatList.props.ListHeaderComponent.props.assignment.id).toBe('w');
+      });
+
+      it('shows the no-matches state when filters exclude every assignment, and clearing restores the list', async () => {
+        const item = makeAssignment({ title: 'Only Item', course: 'CS101', dueDate: '2026-06-20' });
+        const screen = await renderLoggedIn({ assignments: [item] });
+
+        // "Today" excludes this item: it's due 2026-06-20, five days after
+        // FIXED_NOW (2026-06-15), so the due-range filter alone empties the list.
+        screen.firePressOnText('Today');
+
+        let flatList = getFlatList(screen);
+        expect(flatList.props.data).toEqual([]);
+        // FlatList's ListEmptyComponent prop is never auto-rendered by the
+        // mocked FlatList host tag, so assert on the element itself.
+        expect(flatList.props.ListEmptyComponent.props.variant).toBe('noMatches');
+
+        // Firing the noMatches variant's onClear (as App.js wires it) should
+        // reset filters and bring the item back into view.
+        await act(async () => {
+          flatList.props.ListEmptyComponent.props.onClear();
+        });
+
+        flatList = getFlatList(screen);
+        expect(flatList.props.data).toEqual([expect.objectContaining({ title: 'Only Item' })]);
+        expect(flatList.props.ListEmptyComponent.props.variant).toBeUndefined();
+      });
+    });
   });
 });

@@ -26,4 +26,25 @@ describe('EmptyState', () => {
     const screen = render(React.createElement(EmptyState));
     expect(screen.toJSON().type).toBe('View');
   });
+
+  describe('variant="noMatches"', () => {
+    it('shows the "No matches" heading instead of "All clear!"', () => {
+      const screen = render(React.createElement(EmptyState, { variant: 'noMatches', onClear: vi.fn() }));
+      expect(screen.getByText('No matches')).toBeTruthy();
+      expect(screen.queryByText('All clear!')).toBeNull();
+    });
+
+    it('shows a "Clear filters" affordance that calls onClear when tapped', () => {
+      const onClear = vi.fn();
+      const screen = render(React.createElement(EmptyState, { variant: 'noMatches', onClear }));
+      screen.firePressOnText('Clear filters');
+      expect(onClear).toHaveBeenCalledOnce();
+    });
+
+    it('default (no variant) behavior is unchanged when other props are absent', () => {
+      const screen = render(React.createElement(EmptyState));
+      expect(screen.getByText('All clear!')).toBeTruthy();
+      expect(screen.queryByText('No matches')).toBeNull();
+    });
+  });
 });
