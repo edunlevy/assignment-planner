@@ -265,10 +265,40 @@ describe('App', () => {
         });
 
         flatList = getFlatList(screen);
+        expect(flatList.props.data).toHaveLength(2);
         expect(flatList.props.data).toEqual(expect.arrayContaining([
           expect.objectContaining({ id: 'a' }),
           expect.objectContaining({ id: 'b' }),
         ]));
+      });
+
+      it('keeps filters across a token refresh for the SAME user (reset keys on userId, not session identity)', async () => {
+        // Supabase fires onAuthStateChange with a FRESH session object on
+        // TOKEN_REFRESHED and on app foreground, and useAuthSession calls
+        // setSession every time. Keying the reset effect on `session` instead
+        // of `userId` would therefore wipe the user's filters mid-use on a
+        // timer — this pins the dep-array choice the account-switch test
+        // above can't distinguish.
+        let authCallback;
+        supabase.auth.onAuthStateChange.mockImplementation(cb => {
+          authCallback = cb;
+          return { data: { subscription: { unsubscribe: vi.fn() } } };
+        });
+        const a = makeAssignment({ id: 'a', title: 'A Task', course: 'CS101', dueDate: '2026-06-20' });
+        const b = makeAssignment({ id: 'b', title: 'B Task', course: 'BIO150', dueDate: '2026-06-20' });
+        const screen = await renderLoggedIn({ assignments: [a, b] });
+
+        screen.firePressOnText('CS101');
+        let flatList = getFlatList(screen);
+        expect(flatList.props.data).toEqual([expect.objectContaining({ id: 'a' })]);
+
+        // Same user id, new session object identity.
+        await act(async () => {
+          authCallback('TOKEN_REFRESHED', { user: { id: 'user-1', email: 'test@example.com' } });
+        });
+
+        flatList = getFlatList(screen);
+        expect(flatList.props.data).toEqual([expect.objectContaining({ id: 'a' })]);
       });
 
       it('shows the no-matches state when filters exclude every assignment, and clearing restores the list', async () => {
@@ -284,6 +314,10 @@ describe('App', () => {
         // FlatList's ListEmptyComponent prop is never auto-rendered by the
         // mocked FlatList host tag, so assert on the element itself.
         expect(flatList.props.ListEmptyComponent.props.variant).toBe('noMatches');
+        // The Work-on-next card is suppressed alongside "No matches" — a
+        // recommendation directly above "nothing matches" reads as a
+        // self-contradiction (workOnNext itself is unfiltered by design).
+        expect(flatList.props.ListHeaderComponent).toBeNull();
 
         // Firing the noMatches variant's onClear (as App.js wires it) should
         // reset filters and bring the item back into view.

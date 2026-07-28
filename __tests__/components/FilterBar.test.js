@@ -18,8 +18,9 @@ describe('FilterBar', () => {
     // Layout regression guard: RN's base style for horizontal ScrollViews is
     // flexGrow: 1, which would make the chip bar split App.js's free vertical
     // space 50/50 with the FlatList whenever the list is short. No layout
-    // engine runs in these tests, so asserting the style override is the only
-    // way to pin this.
+    // engine runs in these tests — and react-native (with NativeWind's
+    // cssInterop) is mocked wholesale, so this only guards the style prop
+    // being present, not how className and style merge at runtime.
     const screen = render(React.createElement(FilterBar, {
       filters: emptyFilters(),
       courses: COURSES,

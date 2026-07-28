@@ -268,6 +268,16 @@ describe('distinctCourses', () => {
 
   test('is case-sensitive (does not merge differently-cased duplicates)', () => {
     const list = [make({ course: 'CS101' }), make({ course: 'cs101' })];
-    expect(distinctCourses(list)).toEqual(['CS101', 'cs101']);
+    // localeCompare tie-breaks case AFTER base letters (lowercase first in
+    // the default locale), unlike code-unit order which would put all
+    // uppercase before all lowercase.
+    expect(distinctCourses(list)).toEqual(['cs101', 'CS101']);
+  });
+
+  test('sorts alphabetically across mixed case (locale order, not code units)', () => {
+    // Code-unit sort would yield ['Zoology', 'algebra'] — free-text course
+    // names must sort the way a person reads them.
+    const list = [make({ course: 'Zoology' }), make({ course: 'algebra' })];
+    expect(distinctCourses(list)).toEqual(['algebra', 'Zoology']);
   });
 });

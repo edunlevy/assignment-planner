@@ -273,7 +273,11 @@ function AppScreen() {
             renderItem={({ item }) => (
               <AssignmentRow item={item} onPress={() => openEditModal(item)} />
             )}
-            ListHeaderComponent={workOnNext ? <WorkOnNextCard assignment={workOnNext} ranking={ranking} /> : null}
+            // workOnNext is deliberately unfiltered, but recommending an
+            // assignment directly above "No matches" reads as a
+            // self-contradiction — suppress the card when filters (or an
+            // empty account) leave nothing visible below it.
+            ListHeaderComponent={workOnNext && sorted.length > 0 ? <WorkOnNextCard assignment={workOnNext} ranking={ranking} /> : null}
             contentContainerStyle={[styles.list, sorted.length === 0 && styles.listEmpty]}
             ListEmptyComponent={
               assignments.length > 0 && sorted.length === 0
