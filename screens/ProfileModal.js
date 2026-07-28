@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useState } from 'react';
-import { ActivityIndicator, Alert, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Linking, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { cancelAllReminders, saveReminderMap } from '../lib/notifications';
@@ -22,6 +22,9 @@ export default function ProfileModal({
   const [error, setError] = useState('');
   const [calendarBusy, setCalendarBusy] = useState(false);
   const [calendarError, setCalendarError] = useState('');
+  // True when the calendar error is a permission problem the user can fix in
+  // the OS Settings app — shows the "Open Settings" shortcut next to it.
+  const [calendarErrorNeedsSettings, setCalendarErrorNeedsSettings] = useState(false);
 
   async function handleSignOut() {
     setLoading(true);
@@ -157,11 +160,20 @@ export default function ProfileModal({
 
   async function handleEnableCalendarSync() {
     setCalendarError('');
+    setCalendarErrorNeedsSettings(false);
     setCalendarBusy(true);
     try {
-      const granted = await onEnableCalendarSync();
-      if (!granted) {
-        setCalendarError('Calendar permission denied. Enable it for this app in your device Settings to sync assignments.');
+      const result = await onEnableCalendarSync();
+      if (!result?.ok) {
+        if (result?.reason === 'writeOnly') {
+          setCalendarError('Calendar access is set to "Add Events Only." Sync needs Full Access to create its own Assignment Planner calendar — change it in Settings.');
+          setCalendarErrorNeedsSettings(true);
+        } else if (result?.reason === 'createFailed') {
+          setCalendarError('Could not create the Assignment Planner calendar on this device. Please try again.');
+        } else {
+          setCalendarError('Calendar permission denied. Enable it for this app in your device Settings to sync assignments.');
+          setCalendarErrorNeedsSettings(true);
+        }
       }
     } catch {
       setCalendarError('Could not turn on calendar sync. Please try again.');
@@ -172,6 +184,7 @@ export default function ProfileModal({
 
   async function handleDisableCalendarSync(deleteEvents) {
     setCalendarError('');
+    setCalendarErrorNeedsSettings(false);
     setCalendarBusy(true);
     try {
       await onDisableCalendarSync(deleteEvents);
@@ -258,7 +271,16 @@ export default function ProfileModal({
               </Pressable>
             </View>
           )}
-          {calendarError ? <Text style={styles.error}>{calendarError}</Text> : null}
+          {calendarError ? (
+            <View>
+              <Text style={styles.error}>{calendarError}</Text>
+              {calendarErrorNeedsSettings && (
+                <Pressable style={styles.openSettingsButton} onPress={() => { Linking.openSettings().catch(() => {}); }}>
+                  <Text style={styles.openSettingsText}>Open Settings</Text>
+                </Pressable>
+              )}
+            </View>
+          ) : null}
 
           <Pressable
             style={[styles.signOutButton, (loading || deleting) && styles.signOutButtonDisabled]}
@@ -413,6 +435,19 @@ const styles = StyleSheet.create({
     fontSize: 13,
     textAlign: 'center',
     marginTop: 8,
+  },
+  openSettingsButton: {
+    alignSelf: 'center',
+    marginTop: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    backgroundColor: '#F0F4FF',
+  },
+  openSettingsText: {
+    color: '#3B5BDB',
+    fontSize: 13,
+    fontWeight: '600',
   },
   closeButton: {
     alignItems: 'center',

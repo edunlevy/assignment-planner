@@ -13,7 +13,7 @@
       "usesAppleSignIn": true,
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "NSCalendarsWriteOnlyAccessUsageDescription": "Assignment Planner adds your assignment due dates to a dedicated calendar it creates, so you can see them alongside your other events. It never reads the events on your other calendars.",
+        "NSCalendarsFullAccessUsageDescription": "Assignment Planner adds your assignment due dates to a dedicated calendar it creates, so you can see them alongside your other events. It never reads the events on your other calendars.",
         "NSCalendarsUsageDescription": "Assignment Planner adds your assignment due dates to a dedicated calendar it creates, so you can see them alongside your other events. It never reads the events on your other calendars."
       }
     },

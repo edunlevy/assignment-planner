@@ -7,7 +7,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
-import * as Calendar from 'expo-calendar';
+import * as Calendar from 'expo-calendar/legacy';
 import { act } from 'react-test-renderer';
 
 // IMPORTANT: vi.mock is hoisted by vitest to the top of the file, BEFORE the

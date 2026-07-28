@@ -5,7 +5,7 @@ import {
   deleteAssignmentCalendar,
   deleteEventFor,
   ensureAssignmentCalendar,
-  requestCalendarPermission,
+  requestCalendarAccess,
   updateEventFor,
 } from '../lib/calendarSync';
 import { createUserKeyedLock } from '../lib/userKeyedLock';
@@ -231,19 +231,52 @@ export function useCalendarOrchestration(userId) {
     await backfillMissingEvents(userId, assignments);
   }, [userId]);
 
-  // Turn sync on: request permission, ensure the calendar exists, backfill
-  // every current assignment, THEN flip the enabled flag. Returns false
-  // (leaving sync off) if permission was denied.
+  // Turn sync on: request access, ensure the calendar exists, backfill
+  // every current assignment, THEN flip the enabled flag. Returns
+  // { ok: true } on success, or { ok: false, reason } (leaving sync off)
+  // where reason is one of:
+  //   'denied'       — no calendar access
+  //   'writeOnly'    — iOS "Add Events Only"; full access needed (see
+  //                    lib/calendarSync.js header for why)
+  //   'createFailed' — access granted but the dedicated calendar couldn't
+  //                    be created (e.g. no usable calendar source)
+  // The reasons let ProfileModal show an actionable message per case
+  // instead of one generic failure.
   const enableSync = useCallback(async assignments => {
-    if (!userId) return false;
-    const granted = await requestCalendarPermission();
-    if (!granted) return false;
+    if (!userId) return { ok: false, reason: 'denied' };
+    const access = await requestCalendarAccess();
+    if (access !== 'granted') {
+      return { ok: false, reason: access === 'writeOnly' ? 'writeOnly' : 'denied' };
+    }
 
-    await ensureAssignmentCalendar();
-    await AsyncStorage.setItem(enabledKey(userId), 'true');
-    await backfillMissingEvents(userId, assignments);
+    try {
+      await ensureAssignmentCalendar();
+    } catch (e) {
+      console.warn('[calendarSync] could not create the assignment calendar', e);
+      return { ok: false, reason: 'createFailed' };
+    }
+    // The on-disk flag must flip BEFORE the backfill runs — backfill's
+    // lock-guarded isSyncEnabledOnDisk check bails when it reads 'false'.
+    // But that ordering means a backfill failure would strand the flag at
+    // 'true' while React state (and the toggle) stay off, and the next
+    // launch would silently read sync back on — so roll the flag back if
+    // anything past this point throws.
+    try {
+      await AsyncStorage.setItem(enabledKey(userId), 'true');
+      await backfillMissingEvents(userId, assignments);
+    } catch (e) {
+      console.warn('[calendarSync] enabling sync failed part-way; rolling back', e);
+      try {
+        await AsyncStorage.setItem(enabledKey(userId), 'false');
+      } catch {
+        // Rollback write failed too — nothing further to do; the reconcile
+        // paths re-check the flag on every run, so a stale 'true' degrades
+        // to a re-backfill attempt, not corruption.
+      }
+      return { ok: false, reason: 'createFailed' };
+    }
     setSyncEnabled(true);
-    return true;
+    return { ok: true };
   }, [userId]);
 
   // Turn sync off. `deleteEvents` controls whether the dedicated calendar

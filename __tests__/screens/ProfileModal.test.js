@@ -1,5 +1,5 @@
 import React from 'react';
-import { Alert, Platform } from 'react-native';
+import { Alert, Linking, Platform } from 'react-native';
 import { act } from 'react-test-renderer';
 import { render } from '../helpers/renderWithProviders';
 import { supabase } from '../../lib/supabase';
@@ -36,7 +36,7 @@ function makeProps(overrides = {}) {
   return {
     ...baseProps,
     onClose: vi.fn(),
-    onEnableCalendarSync: vi.fn(async () => true),
+    onEnableCalendarSync: vi.fn(async () => ({ ok: true })),
     onDisableCalendarSync: vi.fn(async () => {}),
     ...overrides,
   };
@@ -215,7 +215,7 @@ describe('ProfileModal', () => {
     // events the in-flight toggle creates moments later permanently
     // orphaned (the account — and any record of them — is already gone).
     let resolveEnable;
-    const onEnableCalendarSync = vi.fn(() => new Promise(resolve => { resolveEnable = () => resolve(true); }));
+    const onEnableCalendarSync = vi.fn(() => new Promise(resolve => { resolveEnable = () => resolve({ ok: true }); }));
     const screen = render(React.createElement(ProfileModal, makeProps({ onEnableCalendarSync })));
 
     screen.firePressOnText('Off'); // starts the toggle; calendarBusy -> true
@@ -325,21 +325,55 @@ describe('ProfileModal', () => {
     });
 
     it('tapping Off calls onEnableCalendarSync', async () => {
-      const onEnableCalendarSync = vi.fn(async () => true);
+      const onEnableCalendarSync = vi.fn(async () => ({ ok: true }));
       const screen = render(React.createElement(ProfileModal, makeProps({ calendarSyncEnabled: false, onEnableCalendarSync })));
       screen.firePressOnText('Off');
       await screen.flush();
       expect(onEnableCalendarSync).toHaveBeenCalledOnce();
     });
 
-    it('shows an error when calendar permission is denied', async () => {
-      const onEnableCalendarSync = vi.fn(async () => false);
+    it('shows an error with an Open Settings shortcut when calendar permission is denied', async () => {
+      const onEnableCalendarSync = vi.fn(async () => ({ ok: false, reason: 'denied' }));
       const screen = render(React.createElement(ProfileModal, makeProps({ calendarSyncEnabled: false, onEnableCalendarSync })));
       screen.firePressOnText('Off');
       await screen.flush();
       expect(screen.getByText(
         'Calendar permission denied. Enable it for this app in your device Settings to sync assignments.'
       )).toBeTruthy();
+
+      screen.firePressOnText('Open Settings');
+      expect(Linking.openSettings).toHaveBeenCalledOnce();
+    });
+
+    it('explains iOS "Add Events Only" access specifically, with an Open Settings shortcut', async () => {
+      const onEnableCalendarSync = vi.fn(async () => ({ ok: false, reason: 'writeOnly' }));
+      const screen = render(React.createElement(ProfileModal, makeProps({ calendarSyncEnabled: false, onEnableCalendarSync })));
+      screen.firePressOnText('Off');
+      await screen.flush();
+      expect(screen.getByText(
+        'Calendar access is set to "Add Events Only." Sync needs Full Access to create its own Assignment Planner calendar — change it in Settings.'
+      )).toBeTruthy();
+      expect(screen.getByText('Open Settings')).toBeTruthy();
+    });
+
+    it('shows a create-failure message without an Open Settings shortcut (not a permission problem)', async () => {
+      const onEnableCalendarSync = vi.fn(async () => ({ ok: false, reason: 'createFailed' }));
+      const screen = render(React.createElement(ProfileModal, makeProps({ calendarSyncEnabled: false, onEnableCalendarSync })));
+      screen.firePressOnText('Off');
+      await screen.flush();
+      expect(screen.getByText(
+        'Could not create the Assignment Planner calendar on this device. Please try again.'
+      )).toBeTruthy();
+      expect(screen.queryByText('Open Settings')).toBeNull();
+    });
+
+    it('still shows the generic message when the enable call itself throws', async () => {
+      const onEnableCalendarSync = vi.fn(async () => { throw new Error('boom'); });
+      const screen = render(React.createElement(ProfileModal, makeProps({ calendarSyncEnabled: false, onEnableCalendarSync })));
+      screen.firePressOnText('Off');
+      await screen.flush();
+      expect(screen.getByText('Could not turn on calendar sync. Please try again.')).toBeTruthy();
+      expect(screen.queryByText('Open Settings')).toBeNull();
     });
 
     it('tapping On shows a three-way confirmation (Cancel / Keep Events / Delete Events)', () => {
