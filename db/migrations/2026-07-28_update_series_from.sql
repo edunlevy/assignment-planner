@@ -24,8 +24,18 @@
 --   4. Click Run
 --   5. Verify under Database → Functions that `update_series_from` appears
 --
--- HOW TO REMOVE (rollback):
+-- HOW TO REMOVE (rollback) — BOTH signatures, in case a pre-review 8-arg
+-- version was ever installed:
 --   drop function if exists public.update_series_from(text, date, integer, text, text, integer, text, text, uuid, text);
+--   drop function if exists public.update_series_from(text, date, integer, text, text, integer, text, text);
+
+-- An earlier draft of this function took 8 arguments. CREATE OR REPLACE
+-- matches on name + argument types and cannot change an argument list —
+-- without this drop, a database that ran the old file would keep the old
+-- (user-unfiltered, status-unaware) overload installed and independently
+-- callable via PostgREST alongside the new one.
+drop function if exists public.update_series_from(
+  text, date, integer, text, text, integer, text, text);
 
 create or replace function public.update_series_from(
   p_series_id text,

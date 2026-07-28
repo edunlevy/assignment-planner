@@ -547,10 +547,18 @@ export function useAssignments(userId) {
       // Settle every signature up front, before any scheduling I/O — the
       // markers share one TTL clock, so starting them together maximizes
       // the window in which the N realtime echoes (queued behind this
-      // batch) are still recognized as our own.
-      for (const row of updatedRows) settleSelfMutation(row.id, row);
-
+      // batch) are still recognized as our own. Seeding the commit map in
+      // the same pass makes it total over updatedRows BY CONSTRUCTION:
+      // "settled ⇒ will reach state" then holds for every failure ordering,
+      // not just the ones the scheduling loop anticipates (a settled row
+      // missing from the commit would have its echoes suppressed while its
+      // state never updates — the exact divergence the finally exists to
+      // prevent).
       const withRemindersById = {};
+      for (const row of updatedRows) {
+        settleSelfMutation(row.id, row);
+        withRemindersById[row.id] = { ...row, reminderIds: [] };
+      }
       try {
         for (const row of updatedRows) {
           // Reminder/calendar mirrors are best-effort: a scheduling failure
@@ -582,7 +590,7 @@ export function useAssignments(userId) {
         commitLocal(prev => {
           const seen = new Set(prev.map(a => a.id));
           const added = updatedRows
-            .filter(r => !seen.has(r.id) && withRemindersById[r.id])
+            .filter(r => !seen.has(r.id))
             .map(r => withRemindersById[r.id]);
           return [...added, ...prev.map(a => withRemindersById[a.id] ?? a)];
         });
