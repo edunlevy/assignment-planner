@@ -1,11 +1,12 @@
-import * as Calendar from 'expo-calendar';
+import * as Calendar from 'expo-calendar/legacy';
+import { getCalendarPermissions } from 'expo-calendar';
 import { Platform } from 'react-native';
 import {
   createEventFor,
   deleteAssignmentCalendar,
   deleteEventFor,
   ensureAssignmentCalendar,
-  requestCalendarPermission,
+  requestCalendarAccess,
   updateEventFor,
 } from '../../lib/calendarSync';
 
@@ -29,17 +30,24 @@ beforeEach(() => {
   Calendar.getCalendarsAsync.mockReset();
   Calendar.createCalendarAsync.mockReset();
   Calendar.deleteCalendarAsync.mockReset();
-  Calendar.getDefaultCalendarSourceAsync.mockReset();
+  Calendar.getDefaultCalendarAsync.mockReset();
+  Calendar.getSourcesAsync.mockReset();
   Calendar.createEventAsync.mockReset();
   Calendar.updateEventAsync.mockReset();
   Calendar.deleteEventAsync.mockReset();
   Calendar.getEventAsync.mockReset();
+  getCalendarPermissions.mockReset();
 
   Calendar.getCalendarPermissionsAsync.mockResolvedValue({ status: 'granted' });
   Calendar.requestCalendarPermissionsAsync.mockResolvedValue({ status: 'granted' });
   Calendar.getCalendarsAsync.mockResolvedValue([]);
   Calendar.createCalendarAsync.mockResolvedValue('new-calendar-id');
-  Calendar.getDefaultCalendarSourceAsync.mockResolvedValue({ id: 'source-1', name: 'iCloud' });
+  Calendar.getDefaultCalendarAsync.mockResolvedValue({
+    id: 'default-cal',
+    source: { id: 'source-1', name: 'iCloud', type: 'caldav' },
+  });
+  Calendar.getSourcesAsync.mockResolvedValue([{ id: 'source-1', name: 'iCloud', type: 'caldav' }]);
+  getCalendarPermissions.mockResolvedValue({ status: 'denied', granted: false });
   Calendar.createEventAsync.mockResolvedValue('new-event-id');
   // Default: the event is confirmed gone after a delete (a by-id lookup
   // throwing is the normal "not found" signal) — matches most tests'
@@ -47,27 +55,55 @@ beforeEach(() => {
   Calendar.getEventAsync.mockRejectedValue(new Error('not found'));
 });
 
-describe('requestCalendarPermission', () => {
-  test('returns true when already granted (no re-prompt)', async () => {
-    expect(await requestCalendarPermission()).toBe(true);
+describe('requestCalendarAccess', () => {
+  test("returns 'granted' when already granted (no re-prompt)", async () => {
+    expect(await requestCalendarAccess()).toBe('granted');
     expect(Calendar.requestCalendarPermissionsAsync).not.toHaveBeenCalled();
   });
 
   test('asks the OS when not yet granted', async () => {
     Calendar.getCalendarPermissionsAsync.mockResolvedValue({ status: 'undetermined' });
-    expect(await requestCalendarPermission()).toBe(true);
+    expect(await requestCalendarAccess()).toBe('granted');
     expect(Calendar.requestCalendarPermissionsAsync).toHaveBeenCalled();
   });
 
-  test('returns false when denied', async () => {
+  test("returns 'denied' when denied outright", async () => {
     Calendar.getCalendarPermissionsAsync.mockResolvedValue({ status: 'undetermined' });
     Calendar.requestCalendarPermissionsAsync.mockResolvedValue({ status: 'denied' });
-    expect(await requestCalendarPermission()).toBe(false);
+    expect(await requestCalendarAccess()).toBe('denied');
   });
 
-  test('returns false on web without touching native APIs', async () => {
+  test("returns 'writeOnly' on iOS when full access is denied but the write-only probe is granted (Add Events Only)", async () => {
+    Calendar.getCalendarPermissionsAsync.mockResolvedValue({ status: 'denied' });
+    Calendar.requestCalendarPermissionsAsync.mockResolvedValue({ status: 'denied' });
+    getCalendarPermissions.mockResolvedValue({ status: 'granted', granted: true });
+    expect(await requestCalendarAccess()).toBe('writeOnly');
+    expect(getCalendarPermissions).toHaveBeenCalledWith(true);
+  });
+
+  test('never probes write-only on Android — a denial is just a denial', async () => {
+    Platform.OS = 'android';
+    Calendar.getCalendarPermissionsAsync.mockResolvedValue({ status: 'denied' });
+    Calendar.requestCalendarPermissionsAsync.mockResolvedValue({ status: 'denied' });
+    expect(await requestCalendarAccess()).toBe('denied');
+    expect(getCalendarPermissions).not.toHaveBeenCalled();
+  });
+
+  test("returns 'denied' when the permission calls themselves throw", async () => {
+    Calendar.getCalendarPermissionsAsync.mockRejectedValue(new Error('native error'));
+    expect(await requestCalendarAccess()).toBe('denied');
+  });
+
+  test("returns 'denied' when the write-only probe throws", async () => {
+    Calendar.getCalendarPermissionsAsync.mockResolvedValue({ status: 'denied' });
+    Calendar.requestCalendarPermissionsAsync.mockResolvedValue({ status: 'denied' });
+    getCalendarPermissions.mockRejectedValue(new Error('native error'));
+    expect(await requestCalendarAccess()).toBe('denied');
+  });
+
+  test("returns 'denied' on web without touching native APIs", async () => {
     Platform.OS = 'web';
-    expect(await requestCalendarPermission()).toBe(false);
+    expect(await requestCalendarAccess()).toBe('denied');
     expect(Calendar.getCalendarPermissionsAsync).not.toHaveBeenCalled();
   });
 });
@@ -90,20 +126,55 @@ describe('ensureAssignmentCalendar', () => {
     expect(Calendar.createCalendarAsync).toHaveBeenCalled();
   });
 
-  test('creates via the default source on iOS when none exists', async () => {
+  test("creates under the default calendar's source on iOS when none exists", async () => {
     Platform.OS = 'ios';
     const id = await ensureAssignmentCalendar();
-    expect(Calendar.getDefaultCalendarSourceAsync).toHaveBeenCalled();
+    expect(Calendar.getDefaultCalendarAsync).toHaveBeenCalled();
+    expect(Calendar.getSourcesAsync).not.toHaveBeenCalled();
     expect(Calendar.createCalendarAsync).toHaveBeenCalledWith(
       expect.objectContaining({ title: 'Assignment Planner', sourceId: 'source-1' })
     );
     expect(id).toBe('new-calendar-id');
   });
 
+  test('falls back to scanning sources when getDefaultCalendarAsync fails, preferring CalDAV', async () => {
+    Platform.OS = 'ios';
+    Calendar.getDefaultCalendarAsync.mockRejectedValue(new Error('no default calendar'));
+    Calendar.getSourcesAsync.mockResolvedValue([
+      { id: 'local-1', name: 'On My iPhone', type: 'local' },
+      { id: 'icloud-1', name: 'iCloud', type: 'caldav' },
+    ]);
+    await ensureAssignmentCalendar();
+    expect(Calendar.createCalendarAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceId: 'icloud-1' })
+    );
+  });
+
+  test('falls back to a local source when no CalDAV source exists', async () => {
+    Platform.OS = 'ios';
+    Calendar.getDefaultCalendarAsync.mockResolvedValue({ id: 'cal', source: undefined });
+    Calendar.getSourcesAsync.mockResolvedValue([
+      { id: 'exchange-1', name: 'Work', type: 'exchange' },
+      { id: 'local-1', name: 'On My iPhone', type: 'local' },
+    ]);
+    await ensureAssignmentCalendar();
+    expect(Calendar.createCalendarAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceId: 'local-1' })
+    );
+  });
+
+  test('throws when the device has no calendar sources at all', async () => {
+    Platform.OS = 'ios';
+    Calendar.getDefaultCalendarAsync.mockRejectedValue(new Error('no default calendar'));
+    Calendar.getSourcesAsync.mockResolvedValue([]);
+    await expect(ensureAssignmentCalendar()).rejects.toThrow('No calendar source');
+    expect(Calendar.createCalendarAsync).not.toHaveBeenCalled();
+  });
+
   test('creates via a local source on Android when none exists', async () => {
     Platform.OS = 'android';
     await ensureAssignmentCalendar();
-    expect(Calendar.getDefaultCalendarSourceAsync).not.toHaveBeenCalled();
+    expect(Calendar.getDefaultCalendarAsync).not.toHaveBeenCalled();
     expect(Calendar.createCalendarAsync).toHaveBeenCalledWith(
       expect.objectContaining({
         title: 'Assignment Planner',

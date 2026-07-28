@@ -3,7 +3,7 @@
 // keeps these tests focused on the hook's orchestration policy — the native
 // API details are covered separately in __tests__/lib/calendarSync.test.js.
 vi.mock('../../lib/calendarSync', () => ({
-  requestCalendarPermission: vi.fn(),
+  requestCalendarAccess: vi.fn(),
   ensureAssignmentCalendar: vi.fn(),
   createEventFor: vi.fn(),
   updateEventFor: vi.fn(),
@@ -19,7 +19,7 @@ import {
   deleteAssignmentCalendar,
   deleteEventFor,
   ensureAssignmentCalendar,
-  requestCalendarPermission,
+  requestCalendarAccess,
   updateEventFor,
 } from '../../lib/calendarSync';
 import { renderHook, flushMicrotasks } from '../helpers/renderHook';
@@ -33,7 +33,7 @@ function makeAssignment(id, overrides = {}) {
 beforeEach(async () => {
   await AsyncStorage.clear();
   vi.clearAllMocks();
-  requestCalendarPermission.mockResolvedValue(true);
+  requestCalendarAccess.mockResolvedValue('granted');
   ensureAssignmentCalendar.mockResolvedValue('cal-1');
   createEventFor.mockResolvedValue('event-new');
   updateEventFor.mockResolvedValue(true);
@@ -175,17 +175,47 @@ describe('reconcileOnLoad', () => {
 });
 
 describe('enableSync', () => {
-  test('returns false and stays disabled when permission is denied', async () => {
-    requestCalendarPermission.mockResolvedValue(false);
+  test("returns { ok: false, reason: 'denied' } and stays disabled when access is denied", async () => {
+    requestCalendarAccess.mockResolvedValue('denied');
     const { result } = renderHook(() => useCalendarOrchestration(USER_ID));
     await flushMicrotasks();
 
     let outcome;
     await act(async () => { outcome = await result.current.enableSync([]); });
 
-    expect(outcome).toBe(false);
+    expect(outcome).toEqual({ ok: false, reason: 'denied' });
     expect(result.current.syncEnabled).toBe(false);
     expect(ensureAssignmentCalendar).not.toHaveBeenCalled();
+  });
+
+  test("surfaces write-only access (iOS 'Add Events Only') as its own reason", async () => {
+    requestCalendarAccess.mockResolvedValue('writeOnly');
+    const { result } = renderHook(() => useCalendarOrchestration(USER_ID));
+    await flushMicrotasks();
+
+    let outcome;
+    await act(async () => { outcome = await result.current.enableSync([]); });
+
+    expect(outcome).toEqual({ ok: false, reason: 'writeOnly' });
+    expect(result.current.syncEnabled).toBe(false);
+    expect(ensureAssignmentCalendar).not.toHaveBeenCalled();
+  });
+
+  test("returns { ok: false, reason: 'createFailed' } and stays disabled when the calendar cannot be created", async () => {
+    // The real-world SDK 57 regression path: access granted, but
+    // ensureAssignmentCalendar throws. Must not flip the enabled flag —
+    // otherwise every later scheduleFor would keep failing silently.
+    ensureAssignmentCalendar.mockRejectedValue(new Error('native failure'));
+    const { result } = renderHook(() => useCalendarOrchestration(USER_ID));
+    await flushMicrotasks();
+
+    let outcome;
+    await act(async () => { outcome = await result.current.enableSync([makeAssignment('a1')]); });
+
+    expect(outcome).toEqual({ ok: false, reason: 'createFailed' });
+    expect(result.current.syncEnabled).toBe(false);
+    expect(createEventFor).not.toHaveBeenCalled();
+    expect(await AsyncStorage.getItem(`calendar_sync_enabled_${USER_ID}`)).not.toBe('true');
   });
 
   test('grants: ensures the calendar, backfills, and flips syncEnabled', async () => {
@@ -197,7 +227,7 @@ describe('enableSync', () => {
       outcome = await result.current.enableSync([makeAssignment('a1'), makeAssignment('a2')]);
     });
 
-    expect(outcome).toBe(true);
+    expect(outcome).toEqual({ ok: true });
     expect(result.current.syncEnabled).toBe(true);
     expect(ensureAssignmentCalendar).toHaveBeenCalled();
     expect(createEventFor).toHaveBeenCalledTimes(2);

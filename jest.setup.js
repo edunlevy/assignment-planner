@@ -37,6 +37,7 @@ jest.mock('react-native', () => ({
   Alert: { alert: jest.fn() },
   Linking: {
     openURL: jest.fn(async () => {}),
+    openSettings: jest.fn(async () => {}),
     addEventListener: jest.fn(() => ({ remove: jest.fn() })),
     getInitialURL: jest.fn(async () => null),
   },
@@ -101,22 +102,38 @@ jest.mock('expo-notifications', () => ({
   },
 }));
 
-// expo-calendar: every export used by lib/calendarSync becomes a jest.fn so
-// tests can spy/return-value per case without hitting the native module.
-jest.mock('expo-calendar', () => ({
+// expo-calendar/legacy: every export used by lib/calendarSync becomes a
+// jest.fn so tests can spy/return-value per case without hitting the native
+// module. IMPORTANT: only mock functions that exist in the REAL legacy API —
+// the pre-SDK-57 version of this mock defined getDefaultCalendarSourceAsync,
+// which expo-calendar 57 doesn't have at all, so tests passed while the real
+// device build threw (the "Could not turn on calendar sync" bug).
+jest.mock('expo-calendar/legacy', () => ({
   getCalendarPermissionsAsync: jest.fn(async () => ({ status: 'granted' })),
   requestCalendarPermissionsAsync: jest.fn(async () => ({ status: 'granted' })),
   getCalendarsAsync: jest.fn(async () => []),
   createCalendarAsync: jest.fn(async () => 'calendar-id'),
   deleteCalendarAsync: jest.fn(async () => undefined),
-  getDefaultCalendarSourceAsync: jest.fn(async () => ({ id: 'source-id', name: 'Default' })),
+  getDefaultCalendarAsync: jest.fn(async () => ({
+    id: 'default-calendar-id',
+    source: { id: 'source-id', name: 'Default', type: 'caldav' },
+  })),
+  getSourcesAsync: jest.fn(async () => [{ id: 'source-id', name: 'Default', type: 'caldav' }]),
   createEventAsync: jest.fn(async () => 'event-id'),
   updateEventAsync: jest.fn(async () => undefined),
   deleteEventAsync: jest.fn(async () => undefined),
   getEventAsync: jest.fn(async () => { throw new Error('not found'); }),
   EntityTypes: { EVENT: 'event' },
-  SourceType: { LOCAL: 'local' },
+  SourceType: { LOCAL: 'local', CALDAV: 'caldav' },
   CalendarAccessLevel: { OWNER: 'owner' },
+}));
+
+// expo-calendar (main entry, new object API): lib/calendarSync only uses the
+// write-only permission probe from it. Default: not granted — matching a
+// user who never granted anything, so requestCalendarAccess falls through
+// to 'denied' unless a test overrides.
+jest.mock('expo-calendar', () => ({
+  getCalendarPermissions: jest.fn(async () => ({ status: 'denied', granted: false })),
 }));
 
 // @react-native-community/datetimepicker: native module used by DueDateField

@@ -5,7 +5,7 @@ import {
   deleteAssignmentCalendar,
   deleteEventFor,
   ensureAssignmentCalendar,
-  requestCalendarPermission,
+  requestCalendarAccess,
   updateEventFor,
 } from '../lib/calendarSync';
 import { createUserKeyedLock } from '../lib/userKeyedLock';
@@ -231,19 +231,34 @@ export function useCalendarOrchestration(userId) {
     await backfillMissingEvents(userId, assignments);
   }, [userId]);
 
-  // Turn sync on: request permission, ensure the calendar exists, backfill
-  // every current assignment, THEN flip the enabled flag. Returns false
-  // (leaving sync off) if permission was denied.
+  // Turn sync on: request access, ensure the calendar exists, backfill
+  // every current assignment, THEN flip the enabled flag. Returns
+  // { ok: true } on success, or { ok: false, reason } (leaving sync off)
+  // where reason is one of:
+  //   'denied'       — no calendar access
+  //   'writeOnly'    — iOS "Add Events Only"; full access needed (see
+  //                    lib/calendarSync.js header for why)
+  //   'createFailed' — access granted but the dedicated calendar couldn't
+  //                    be created (e.g. no usable calendar source)
+  // The reasons let ProfileModal show an actionable message per case
+  // instead of one generic failure.
   const enableSync = useCallback(async assignments => {
-    if (!userId) return false;
-    const granted = await requestCalendarPermission();
-    if (!granted) return false;
+    if (!userId) return { ok: false, reason: 'denied' };
+    const access = await requestCalendarAccess();
+    if (access !== 'granted') {
+      return { ok: false, reason: access === 'writeOnly' ? 'writeOnly' : 'denied' };
+    }
 
-    await ensureAssignmentCalendar();
+    try {
+      await ensureAssignmentCalendar();
+    } catch (e) {
+      console.warn('[calendarSync] could not create the assignment calendar', e);
+      return { ok: false, reason: 'createFailed' };
+    }
     await AsyncStorage.setItem(enabledKey(userId), 'true');
     await backfillMissingEvents(userId, assignments);
     setSyncEnabled(true);
-    return true;
+    return { ok: true };
   }, [userId]);
 
   // Turn sync off. `deleteEvents` controls whether the dedicated calendar
