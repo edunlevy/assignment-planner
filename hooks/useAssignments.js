@@ -6,6 +6,7 @@ import {
   sanitizeAssignment,
 } from '../lib/assignment';
 import { createMutationGuards } from '../lib/mutationGuards';
+import { differenceInCalendarDays, parseISO } from 'date-fns';
 import {
   dbDelete,
   dbDeleteSeries,
@@ -13,6 +14,7 @@ import {
   dbInsertMany,
   dbFetch,
   dbUpdate,
+  dbUpdateSeriesFrom,
 } from '../lib/assignmentsDb';
 import {
   detectTimezoneChanged,
@@ -518,6 +520,95 @@ export function useAssignments(userId) {
     commitLocal(prev => prev.filter(a => a.id !== id));
   }), [userId, commitLocal, enqueueForId, markTombstone, reminders, calendarCancelFor]);
 
+  // "Edit this and all future occurrences": apply the uniform base fields to
+  // every row of the series with dueDate >= the edited row's ORIGINAL
+  // dueDate, shifting each occurrence's date by the same day-delta the user
+  // applied to the edited one (Tue→Thu moves the whole tail +2 days,
+  // preserving spacing). One atomic RPC (see dbUpdateSeriesFrom), then
+  // per-row reminder/calendar rescheduling. Shares ONE batch task across the
+  // per-id queues of ALL affected ids — same reasoning as removeSeries — so
+  // a concurrent realtime event for any affected row serializes against the
+  // series edit rather than racing it. Each returned row settles its own
+  // self-mutation signature (the FULL server row, which is what rowsMatch
+  // compares against the realtime echo — see lib/assignment.js rowsMatch).
+  const updateSeriesFrom = useCallback((id, changes) => {
+    const target = assignments.find(a => a.id === id);
+    if (!target?.seriesId) return Promise.reject(new Error('Not a series row'));
+
+    const fromDate = target.dueDate;
+    const dayDelta = differenceInCalendarDays(parseISO(changes.dueDate), parseISO(fromDate));
+    const ids = assignments
+      .filter(a => a.seriesId === target.seriesId && a.dueDate >= fromDate)
+      .map(a => a.id);
+
+    const batchWork = async () => {
+      const updatedRows = await dbUpdateSeriesFrom(target.seriesId, fromDate, dayDelta, target.id, changes);
+
+      // Settle every signature up front, before any scheduling I/O — the
+      // markers share one TTL clock, so starting them together maximizes
+      // the window in which the N realtime echoes (queued behind this
+      // batch) are still recognized as our own. Seeding the commit map in
+      // the same pass makes it total over updatedRows BY CONSTRUCTION:
+      // "settled ⇒ will reach state" then holds for every failure ordering,
+      // not just the ones the scheduling loop anticipates (a settled row
+      // missing from the commit would have its echoes suppressed while its
+      // state never updates — the exact divergence the finally exists to
+      // prevent).
+      const withRemindersById = {};
+      for (const row of updatedRows) {
+        settleSelfMutation(row.id, row);
+        withRemindersById[row.id] = { ...row, reminderIds: [] };
+      }
+      try {
+        for (const row of updatedRows) {
+          // Reminder/calendar mirrors are best-effort: a scheduling failure
+          // on one row must not abort the rest of the tail — the DB update
+          // already landed, and dropping the commit would leave rows whose
+          // echoes are suppressed AND whose state never updated, i.e. a
+          // divergence only a full refetch could heal.
+          let reminderIds = [];
+          try {
+            // Sequential on purpose: scheduleFor serializes on the per-user
+            // reminder-map lock anyway, and 52 parallel calls would just queue.
+            // eslint-disable-next-line no-await-in-loop
+            reminderIds = await reminders.scheduleFor(row);
+            // eslint-disable-next-line no-await-in-loop
+            await calendarScheduleFor(row);
+          } catch (e) {
+            console.warn('[updateSeriesFrom] rescheduling failed for row', row.id, e);
+          }
+          withRemindersById[row.id] = { ...row, reminderIds };
+        }
+      } finally {
+        // Commit whatever accumulated even if the loop aborted unexpectedly
+        // — every DB-updated row with a settled signature MUST reach state.
+        // UPSERT, not map: the server's WHERE is authoritative and can
+        // return rows this device hasn't seen yet (created on another
+        // device); prev.map would silently drop them while their settled
+        // signatures suppress the very echoes that would have delivered
+        // them — invisible rows until a full refetch.
+        commitLocal(prev => {
+          const seen = new Set(prev.map(a => a.id));
+          const added = updatedRows
+            .filter(r => !seen.has(r.id))
+            .map(r => withRemindersById[r.id]);
+          return [...added, ...prev.map(a => withRemindersById[a.id] ?? a)];
+        });
+      }
+      return updatedRows.length;
+    };
+
+    let primary;
+    for (const affectedId of ids) {
+      if (primary === undefined) {
+        primary = enqueueForId(affectedId, batchWork);
+      } else {
+        enqueueForId(affectedId, () => primary.catch(() => {}));
+      }
+    }
+    return primary ?? Promise.resolve(0);
+  }, [assignments, commitLocal, settleSelfMutation, enqueueForId, reminders, calendarScheduleFor]);
+
   // Delete every assignment in a recurring series at once. Shares ONE
   // batch task across the per-id queues of ALL affected ids — same
   // reasoning as insertMany's shared-batch pattern — so a concurrent
@@ -575,6 +666,7 @@ export function useAssignments(userId) {
     insert,
     insertMany,
     update,
+    updateSeriesFrom,
     remove,
     removeSeries,
     calendarSyncEnabled: calendar.syncEnabled,

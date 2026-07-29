@@ -2,7 +2,7 @@
 // Exercises the form state/validation/submit/delete logic extracted from
 // AssignmentFormModal, in isolation (no component rendering).
 
-import { Alert } from 'react-native';
+import { Alert, Platform } from 'react-native';
 import { act } from 'react-test-renderer';
 import { renderHook, flushMicrotasks } from '../helpers/renderHook';
 import { useAssignmentForm, EMPTY_FORM } from '../../hooks/useAssignmentForm';
@@ -18,6 +18,7 @@ function defaultCallbacks(overrides = {}) {
     onCreate: vi.fn(async () => {}),
     onCreateRecurring: vi.fn(async () => {}),
     onUpdate: vi.fn(async () => {}),
+    onUpdateSeries: vi.fn(async () => {}),
     onDelete: vi.fn(),
     onDeleteSeries: vi.fn(),
     ...overrides,
@@ -336,6 +337,231 @@ describe('useAssignmentForm — handleSubmit', () => {
     // This is what the spec promises and what actually fails today:
     expect(cbs.onCreateRecurring).not.toHaveBeenCalled();
     expect(result.current.fieldErrors.repeatCount).toBeTruthy();
+  });
+});
+
+// F3b — editing a row WITH a seriesId no longer calls onUpdate directly; it
+// asks which occurrences the change applies to (chooseSeriesEditScope).
+describe('useAssignmentForm — chooseSeriesEditScope (native, editing a series row)', () => {
+  function seriesEditingSetup(overrides = {}) {
+    const onUpdate = vi.fn(async () => {});
+    const onUpdateSeries = vi.fn(async () => {});
+    const editing = makeAssignment({
+      title: 'Weekly Quiz',
+      course: 'CS101',
+      dueDate: '2026-06-15',
+      dueTime: null,
+      importance: 3,
+      complexity: 'medium',
+      status: 'in_progress',
+      seriesId: 'series-1',
+      ...overrides,
+    });
+    return { onUpdate, onUpdateSeries, editing };
+  }
+
+  it('handleSubmit shows a 3-button Alert with the expected title/message/buttons shape', async () => {
+    const { onUpdate, onUpdateSeries, editing } = seriesEditingSetup();
+    const { result } = renderHook(() =>
+      useAssignmentForm({ visible: true, editing, ...defaultCallbacks({ onUpdate, onUpdateSeries }) })
+    );
+    await flushMicrotasks();
+
+    act(() => { result.current.handleSubmit(); });
+
+    expect(Alert.alert).toHaveBeenCalledOnce();
+    const [title, message, buttons, options] = Alert.alert.mock.calls[0];
+    expect(title).toBe('Apply changes to…');
+    expect(message).toBe(
+      'This assignment repeats. Apply your changes to just this occurrence, or to this and all future occurrences?'
+    );
+    expect(buttons.map(b => b.text)).toEqual(['Cancel', 'Just this one', 'This & future']);
+    expect(buttons[0].style).toBe('cancel');
+    expect(typeof options.onDismiss).toBe('function');
+  });
+
+  it('"Just this one" calls onUpdate(editing.id, {...base, status: form.status}) — status INCLUDED', async () => {
+    const { onUpdate, onUpdateSeries, editing } = seriesEditingSetup();
+    const { result } = renderHook(() =>
+      useAssignmentForm({ visible: true, editing, ...defaultCallbacks({ onUpdate, onUpdateSeries }) })
+    );
+    await flushMicrotasks();
+
+    act(() => { result.current.handleChange('status', 'completed'); });
+
+    let submitPromise;
+    act(() => { submitPromise = result.current.handleSubmit(); });
+
+    const [, , buttons] = Alert.alert.mock.calls[0];
+    const justThisOne = buttons.find(b => b.text === 'Just this one');
+    await act(async () => { justThisOne.onPress(); await submitPromise; });
+
+    expect(onUpdate).toHaveBeenCalledWith(editing.id, {
+      title: 'Weekly Quiz',
+      course: 'CS101',
+      dueDate: '2026-06-15',
+      dueTime: null,
+      importance: 3,
+      complexity: 'medium',
+      status: 'completed',
+    });
+    expect(onUpdateSeries).not.toHaveBeenCalled();
+  });
+
+  it('"This & future" calls onUpdateSeries(editing.id, {...base, status}) — status INCLUDED, applied by the RPC to the target row only', async () => {
+    // Regression (PR #42 review): the first version sent bare `base`, which
+    // silently discarded a status change on the very row the user was
+    // editing — the picker snapped back after save. The status now rides
+    // along and update_series_from applies it to p_target_id alone; the
+    // rest of the tail still keeps each occurrence's own status.
+    const { onUpdate, onUpdateSeries, editing } = seriesEditingSetup();
+    const { result } = renderHook(() =>
+      useAssignmentForm({ visible: true, editing, ...defaultCallbacks({ onUpdate, onUpdateSeries }) })
+    );
+    await flushMicrotasks();
+
+    act(() => { result.current.handleChange('status', 'completed'); });
+
+    let submitPromise;
+    act(() => { submitPromise = result.current.handleSubmit(); });
+
+    const [, , buttons] = Alert.alert.mock.calls[0];
+    const thisAndFuture = buttons.find(b => b.text === 'This & future');
+    await act(async () => { thisAndFuture.onPress(); await submitPromise; });
+
+    expect(onUpdateSeries).toHaveBeenCalledWith(editing.id, {
+      title: 'Weekly Quiz',
+      course: 'CS101',
+      dueDate: '2026-06-15',
+      dueTime: null,
+      importance: 3,
+      complexity: 'medium',
+      status: 'completed',
+    });
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
+  it('Cancel resolves without calling onUpdate or onUpdateSeries', async () => {
+    const { onUpdate, onUpdateSeries, editing } = seriesEditingSetup();
+    const { result } = renderHook(() =>
+      useAssignmentForm({ visible: true, editing, ...defaultCallbacks({ onUpdate, onUpdateSeries }) })
+    );
+    await flushMicrotasks();
+
+    let submitPromise;
+    act(() => { submitPromise = result.current.handleSubmit(); });
+
+    const [, , buttons] = Alert.alert.mock.calls[0];
+    const cancelButton = buttons.find(b => b.text === 'Cancel');
+    await act(async () => { cancelButton.onPress(); await submitPromise; });
+
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(onUpdateSeries).not.toHaveBeenCalled();
+  });
+
+  it('onDismiss (Android back button / tap outside) resolves without calling either callback', async () => {
+    const { onUpdate, onUpdateSeries, editing } = seriesEditingSetup();
+    const { result } = renderHook(() =>
+      useAssignmentForm({ visible: true, editing, ...defaultCallbacks({ onUpdate, onUpdateSeries }) })
+    );
+    await flushMicrotasks();
+
+    let submitPromise;
+    act(() => { submitPromise = result.current.handleSubmit(); });
+
+    const [, , , options] = Alert.alert.mock.calls[0];
+    await act(async () => { options.onDismiss(); await submitPromise; });
+
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(onUpdateSeries).not.toHaveBeenCalled();
+  });
+});
+
+describe('useAssignmentForm — chooseSeriesEditScope (web, editing a series row)', () => {
+  function seriesEditingSetup(overrides = {}) {
+    const onUpdate = vi.fn(async () => {});
+    const onUpdateSeries = vi.fn(async () => {});
+    const editing = makeAssignment({
+      title: 'Weekly Quiz',
+      course: 'CS101',
+      dueDate: '2026-06-15',
+      dueTime: null,
+      importance: 3,
+      complexity: 'medium',
+      status: 'in_progress',
+      seriesId: 'series-1',
+      ...overrides,
+    });
+    return { onUpdate, onUpdateSeries, editing };
+  }
+
+  // Platform.OS / globalThis.window juggling copied from the
+  // handleDelete web-confirm tests in ProfileModal.test.js.
+  it('OK (confirm accepted) calls onUpdateSeries with {...base, status} — RPC applies status to the target row only', async () => {
+    const originalOS = Platform.OS;
+    const prevWindow = globalThis.window;
+    const confirm = vi.fn(() => true);
+    Platform.OS = 'web';
+    globalThis.window = { confirm };
+    try {
+      const { onUpdate, onUpdateSeries, editing } = seriesEditingSetup();
+      const { result } = renderHook(() =>
+        useAssignmentForm({ visible: true, editing, ...defaultCallbacks({ onUpdate, onUpdateSeries }) })
+      );
+      await flushMicrotasks();
+
+      await act(async () => { await result.current.handleSubmit(); });
+
+      expect(confirm).toHaveBeenCalledOnce();
+      expect(Alert.alert).not.toHaveBeenCalled();
+      expect(onUpdateSeries).toHaveBeenCalledWith(editing.id, {
+        title: 'Weekly Quiz',
+        course: 'CS101',
+        dueDate: '2026-06-15',
+        dueTime: null,
+        importance: 3,
+        complexity: 'medium',
+        status: 'in_progress',
+      });
+      expect(onUpdate).not.toHaveBeenCalled();
+    } finally {
+      Platform.OS = originalOS;
+      if (prevWindow === undefined) delete globalThis.window;
+      else globalThis.window = prevWindow;
+    }
+  });
+
+  it('Cancel (confirm dismissed) calls onUpdate with {...base, status} — single-row behavior', async () => {
+    const originalOS = Platform.OS;
+    const prevWindow = globalThis.window;
+    const confirm = vi.fn(() => false);
+    Platform.OS = 'web';
+    globalThis.window = { confirm };
+    try {
+      const { onUpdate, onUpdateSeries, editing } = seriesEditingSetup();
+      const { result } = renderHook(() =>
+        useAssignmentForm({ visible: true, editing, ...defaultCallbacks({ onUpdate, onUpdateSeries }) })
+      );
+      await flushMicrotasks();
+
+      await act(async () => { await result.current.handleSubmit(); });
+
+      expect(confirm).toHaveBeenCalledOnce();
+      expect(onUpdate).toHaveBeenCalledWith(editing.id, {
+        title: 'Weekly Quiz',
+        course: 'CS101',
+        dueDate: '2026-06-15',
+        dueTime: null,
+        importance: 3,
+        complexity: 'medium',
+        status: 'in_progress',
+      });
+      expect(onUpdateSeries).not.toHaveBeenCalled();
+    } finally {
+      Platform.OS = originalOS;
+      if (prevWindow === undefined) delete globalThis.window;
+      else globalThis.window = prevWindow;
+    }
   });
 });
 

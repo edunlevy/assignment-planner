@@ -21,8 +21,16 @@ vi.mock('../../screens/ProfileModal', () => ({
 vi.mock('../../screens/ResetPasswordModal', () => ({
   default: () => React.createElement('Text', null, 'ResetPasswordModalStub'),
 }));
+// Captures the props App.js passes to AssignmentFormModal on the most recent
+// render, so tests can assert on prop WIRING (e.g. onUpdateSeries) without
+// rendering the real modal (covered separately in
+// __tests__/components/AssignmentFormModal.test.js).
+let lastFormModalProps = null;
 vi.mock('../../components/AssignmentFormModal', () => ({
-  default: () => React.createElement('Text', null, 'AssignmentFormModalStub'),
+  default: props => {
+    lastFormModalProps = props;
+    return React.createElement('Text', null, 'AssignmentFormModalStub');
+  },
   STATUS_COLORS: {
     not_started: '#FF6B6B',
     in_progress: '#FFB347',
@@ -59,7 +67,9 @@ function defaultAssignmentsHook(overrides = {}) {
     insert: vi.fn(),
     insertMany: vi.fn(),
     update: vi.fn(),
+    updateSeriesFrom: vi.fn(),
     remove: vi.fn(),
+    removeSeries: vi.fn(),
     ...overrides,
   };
 }
@@ -147,6 +157,36 @@ describe('App', () => {
     it('shows the FAB ("+") button', async () => {
       const screen = await renderLoggedIn();
       expect(screen.getByText('+')).toBeTruthy();
+    });
+
+    // F3b wiring: App's handleUpdateSeries must forward to updateSeriesFrom,
+    // wrapped in the same runMutation (saving spinner + sync-error banner)
+    // flow as every other mutation — not call it bare.
+    it('wires onUpdateSeries through to updateSeriesFrom via runMutation', async () => {
+      const updateSeriesFrom = vi.fn(async () => 2);
+      await renderLoggedIn({ updateSeriesFrom });
+
+      expect(typeof lastFormModalProps.onUpdateSeries).toBe('function');
+
+      await act(async () => {
+        await lastFormModalProps.onUpdateSeries('row-1', { title: 'Updated' });
+      });
+
+      expect(updateSeriesFrom).toHaveBeenCalledWith('row-1', { title: 'Updated' });
+    });
+
+    it('a failed onUpdateSeries reports the save error via reportSyncError (runMutation error handling)', async () => {
+      const updateSeriesFrom = vi.fn(async () => { throw new Error('boom'); });
+      const reportSyncError = vi.fn();
+      const clearSyncError = vi.fn();
+      await renderLoggedIn({ updateSeriesFrom, reportSyncError, clearSyncError });
+
+      await act(async () => {
+        await lastFormModalProps.onUpdateSeries('row-1', { title: 'Updated' });
+      });
+
+      expect(clearSyncError).toHaveBeenCalled();
+      expect(reportSyncError).toHaveBeenCalledWith('Could not save. Check your connection and try again.');
     });
 
     it('switches to CalendarView when the "Calendar" segment is tapped', async () => {

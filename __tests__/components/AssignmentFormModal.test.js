@@ -19,6 +19,7 @@ const defaults = {
   onCreate: vi.fn(async () => {}),
   onCreateRecurring: vi.fn(async () => {}),
   onUpdate: vi.fn(async () => {}),
+  onUpdateSeries: vi.fn(async () => {}),
   onDelete: vi.fn(),
   onDeleteSeries: vi.fn(),
 };
@@ -394,6 +395,59 @@ describe('AssignmentFormModal — edit mode', () => {
     expect(onUpdate).toHaveBeenCalledOnce();
     const [, changes] = onUpdate.mock.calls[0];
     expect(changes.status).toBe('completed');
+  });
+
+  // F3b wiring: editing a row WITH a seriesId routes handleSubmit through
+  // chooseSeriesEditScope (Alert.alert) instead of calling onUpdate directly.
+  // AssignmentFormModal must forward onUpdateSeries through unchanged so
+  // "This & future" reaches the mutation layer.
+  it('editing a series row and choosing "This & future" calls onUpdateSeries, not onUpdate', async () => {
+    const onUpdate = vi.fn(async () => {});
+    const onUpdateSeries = vi.fn(async () => {});
+    const editing = editingAssignment({ seriesId: 'series-1' });
+    const screen = render(React.createElement(
+      AssignmentFormModal,
+      makeProps({ editing, onUpdate, onUpdateSeries })
+    ));
+    await screen.flush();
+
+    screen.firePressOnText('Save Changes');
+    await screen.flush();
+
+    expect(Alert.alert).toHaveBeenCalledOnce();
+    const [, , buttons] = Alert.alert.mock.calls[0];
+    const thisAndFuture = buttons.find(b => b.text === 'This & future');
+    await act(async () => { thisAndFuture.onPress(); });
+    await screen.flush();
+
+    expect(onUpdateSeries).toHaveBeenCalledOnce();
+    expect(onUpdateSeries.mock.calls[0][0]).toBe(editing.id);
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
+  it('editing a series row and choosing "Just this one" calls onUpdate with status, not onUpdateSeries', async () => {
+    const onUpdate = vi.fn(async () => {});
+    const onUpdateSeries = vi.fn(async () => {});
+    const editing = editingAssignment({ seriesId: 'series-1' });
+    const screen = render(React.createElement(
+      AssignmentFormModal,
+      makeProps({ editing, onUpdate, onUpdateSeries })
+    ));
+    await screen.flush();
+
+    screen.firePressOnText('Save Changes');
+    await screen.flush();
+
+    const [, , buttons] = Alert.alert.mock.calls[0];
+    const justThisOne = buttons.find(b => b.text === 'Just this one');
+    await act(async () => { justThisOne.onPress(); });
+    await screen.flush();
+
+    expect(onUpdate).toHaveBeenCalledOnce();
+    const [id, changes] = onUpdate.mock.calls[0];
+    expect(id).toBe(editing.id);
+    expect(changes.status).toBe('in_progress');
+    expect(onUpdateSeries).not.toHaveBeenCalled();
   });
 });
 
