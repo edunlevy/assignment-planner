@@ -221,6 +221,30 @@ export default function AssignmentFormModal({
               <Text style={styles.cancelButtonText}>Cancel</Text>
             </Pressable>
           </ScrollView>
+
+          {/* Web-only series-edit-scope chooser (native uses Alert.alert —
+              see useAssignmentForm.chooseSeriesEditScope). Rendered as an
+              in-modal overlay so all three choices exist on web, where the
+              old window.confirm fallback had no way to back out. */}
+          {f.scopePromptVisible && (
+            <View style={styles.scopeOverlay}>
+              <View style={styles.scopeSheet}>
+                <Text style={styles.scopeTitle}>Apply changes to…</Text>
+                <Text style={styles.scopeBody}>
+                  This assignment repeats. Apply your changes to just this occurrence, or to this and all future occurrences?
+                </Text>
+                <Pressable style={styles.scopeButton} onPress={() => f.resolveScopePrompt('one')}>
+                  <Text style={styles.scopeButtonText}>Just this one</Text>
+                </Pressable>
+                <Pressable style={styles.scopeButton} onPress={() => f.resolveScopePrompt('future')}>
+                  <Text style={styles.scopeButtonText}>This & future occurrences</Text>
+                </Pressable>
+                <Pressable style={styles.scopeCancelButton} onPress={() => f.resolveScopePrompt('cancel')}>
+                  <Text style={styles.scopeCancelText}>Cancel</Text>
+                </Pressable>
+              </View>
+            </View>
+          )}
         </View>
     </Modal>
   );

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Alert, Platform } from 'react-native';
 import { validateAssignmentForm, ruleFromForm, hasErrors, EMPTY_ERRORS } from '../lib/formValidation';
 
@@ -58,12 +58,25 @@ export function useAssignmentForm({
 }) {
   const [form, setForm] = useState(EMPTY_FORM);
   const [fieldErrors, setFieldErrors] = useState(EMPTY_ERRORS);
+  // Web-only in-modal replacement for the native series-edit-scope Alert
+  // (see chooseSeriesEditScope). Visibility drives the overlay in
+  // AssignmentFormModal; the pending promise's resolver and payload live in
+  // the ref so a re-render can't lose them.
+  const [scopePromptVisible, setScopePromptVisible] = useState(false);
+  const scopePromptRef = useRef(null); // { resolve, withStatus } while visible
 
   // Reset form state when the modal opens or switches between create/edit.
   // Effect-based so we don't issue setState during render (which Strict Mode
   // and React 19 are stricter about). The `visible` gate ensures we only
   // re-seed on open transitions, never while the user is mid-edit.
   useEffect(() => {
+    // Runs on BOTH open and close (before the visible gate below): a scope
+    // prompt can't meaningfully survive the modal closing or re-seeding
+    // under it, and its promise must settle either way or handleSubmit
+    // dangles forever. Resolving with nothing = cancel, no write.
+    scopePromptRef.current?.resolve();
+    scopePromptRef.current = null;
+    setScopePromptVisible(false);
     if (!visible) return;
     setForm(formFor(editing));
     setFieldErrors(EMPTY_ERRORS);
@@ -135,20 +148,18 @@ export function useAssignmentForm({
   // picker when they saved; discarding it would silently revert a visible
   // edit) while the rest of the tail keeps each occurrence's own completion
   // state — that split lives in the update_series_from RPC. On web,
-  // Alert.alert renders no actionable buttons, so window.confirm chooses
-  // between the two scopes (OK = this and future, Cancel = just this one) —
-  // the binary-confirm limitation matches handleDeleteSeries below; backing
-  // out entirely on web means closing the modal without saving.
+  // Alert.alert renders no actionable buttons, so the choice renders as an
+  // in-modal overlay (AssignmentFormModal) with the same three options the
+  // native Alert offers — the earlier window.confirm fallback collapsed
+  // Cancel into "just this one", the opposite of what Cancel means in every
+  // other confirm in this file.
   function chooseSeriesEditScope(base) {
     const withStatus = { ...base, status: form.status };
     if (Platform.OS === 'web') {
-      // eslint-disable-next-line no-alert
-      const applyToFuture = window.confirm(
-        'Apply this change to this and all future occurrences? Cancel applies it to just this one.'
-      );
-      return applyToFuture
-        ? onUpdateSeries(editing.id, withStatus)
-        : onUpdate(editing.id, withStatus);
+      return new Promise(resolve => {
+        scopePromptRef.current = { resolve, withStatus };
+        setScopePromptVisible(true);
+      });
     }
     return new Promise(resolve => {
       Alert.alert(
@@ -170,6 +181,23 @@ export function useAssignmentForm({
         { onDismiss: () => resolve() },
       );
     });
+  }
+
+  // Settle the web scope prompt. choice: 'one' | 'future' | 'cancel'.
+  // Cancel resolves without saving — the modal stays open with edits intact,
+  // matching the native Alert's Cancel and this file's other confirms.
+  function resolveScopePrompt(choice) {
+    const pending = scopePromptRef.current;
+    scopePromptRef.current = null;
+    setScopePromptVisible(false);
+    if (!pending) return;
+    if (choice === 'one') {
+      pending.resolve(onUpdate(editing.id, pending.withStatus));
+    } else if (choice === 'future') {
+      pending.resolve(onUpdateSeries(editing.id, pending.withStatus));
+    } else {
+      pending.resolve();
+    }
   }
 
   function handleDelete() {
@@ -218,6 +246,8 @@ export function useAssignmentForm({
     handleSubmit,
     handleDelete,
     handleDeleteSeries,
+    scopePromptVisible,
+    resolveScopePrompt,
     importanceHint: IMPORTANCE_HINTS[form.importance],
   };
 }

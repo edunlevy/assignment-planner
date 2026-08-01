@@ -136,4 +136,56 @@ export const styles = StyleSheet.create({
     color: TEXT_MUTED,
     fontSize: 15,
   },
+  // Web-only series-edit-scope chooser overlay (AssignmentFormModal).
+  scopeOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(26, 26, 46, 0.5)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  scopeSheet: {
+    backgroundColor: WHITE,
+    borderRadius: 16,
+    padding: 20,
+    width: '100%',
+    maxWidth: 360,
+  },
+  scopeTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: TEXT_PRIMARY,
+    marginBottom: 8,
+  },
+  scopeBody: {
+    fontSize: 14,
+    color: TEXT_SECONDARY,
+    marginBottom: 16,
+    lineHeight: 20,
+  },
+  scopeButton: {
+    backgroundColor: PRIMARY,
+    borderRadius: 12,
+    padding: 14,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  scopeButtonText: {
+    color: WHITE,
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  scopeCancelButton: {
+    alignItems: 'center',
+    marginTop: 12,
+    padding: 8,
+  },
+  scopeCancelText: {
+    color: TEXT_MUTED,
+    fontSize: 15,
+  },
 });

@@ -495,74 +495,109 @@ describe('useAssignmentForm — chooseSeriesEditScope (web, editing a series row
     return { onUpdate, onUpdateSeries, editing };
   }
 
-  // Platform.OS / globalThis.window juggling copied from the
-  // handleDelete web-confirm tests in ProfileModal.test.js.
-  it('OK (confirm accepted) calls onUpdateSeries with {...base, status} — RPC applies status to the target row only', async () => {
-    const originalOS = Platform.OS;
-    const prevWindow = globalThis.window;
-    const confirm = vi.fn(() => true);
-    Platform.OS = 'web';
-    globalThis.window = { confirm };
-    try {
-      const { onUpdate, onUpdateSeries, editing } = seriesEditingSetup();
-      const { result } = renderHook(() =>
-        useAssignmentForm({ visible: true, editing, ...defaultCallbacks({ onUpdate, onUpdateSeries }) })
-      );
-      await flushMicrotasks();
+  // On web the choice renders as an in-modal overlay with the same three
+  // options the native Alert offers — the old window.confirm fallback
+  // collapsed Cancel into "just this one" (a Cancel that saved!), the
+  // opposite of every other confirm in this file. No window stub needed:
+  // the web branch never touches window.confirm anymore.
+  const EXPECTED_PAYLOAD = {
+    title: 'Weekly Quiz',
+    course: 'CS101',
+    dueDate: '2026-06-15',
+    dueTime: null,
+    importance: 3,
+    complexity: 'medium',
+    status: 'in_progress',
+  };
 
-      await act(async () => { await result.current.handleSubmit(); });
+  async function webScopePromptSetup() {
+    const { onUpdate, onUpdateSeries, editing } = seriesEditingSetup();
+    const { result } = renderHook(() =>
+      useAssignmentForm({ visible: true, editing, ...defaultCallbacks({ onUpdate, onUpdateSeries }) })
+    );
+    await flushMicrotasks();
 
-      expect(confirm).toHaveBeenCalledOnce();
-      expect(Alert.alert).not.toHaveBeenCalled();
-      expect(onUpdateSeries).toHaveBeenCalledWith(editing.id, {
-        title: 'Weekly Quiz',
-        course: 'CS101',
-        dueDate: '2026-06-15',
-        dueTime: null,
-        importance: 3,
-        complexity: 'medium',
-        status: 'in_progress',
-      });
-      expect(onUpdate).not.toHaveBeenCalled();
-    } finally {
-      Platform.OS = originalOS;
-      if (prevWindow === undefined) delete globalThis.window;
-      else globalThis.window = prevWindow;
-    }
-  });
+    let submitPromise;
+    act(() => { submitPromise = result.current.handleSubmit(); });
+    await flushMicrotasks();
 
-  it('Cancel (confirm dismissed) calls onUpdate with {...base, status} — single-row behavior', async () => {
-    const originalOS = Platform.OS;
-    const prevWindow = globalThis.window;
-    const confirm = vi.fn(() => false);
-    Platform.OS = 'web';
-    globalThis.window = { confirm };
-    try {
-      const { onUpdate, onUpdateSeries, editing } = seriesEditingSetup();
-      const { result } = renderHook(() =>
-        useAssignmentForm({ visible: true, editing, ...defaultCallbacks({ onUpdate, onUpdateSeries }) })
-      );
-      await flushMicrotasks();
+    expect(Alert.alert).not.toHaveBeenCalled();
+    expect(result.current.scopePromptVisible).toBe(true);
+    return { result, submitPromise, onUpdate, onUpdateSeries, editing };
+  }
 
-      await act(async () => { await result.current.handleSubmit(); });
+  function onWeb(fn) {
+    return async () => {
+      const originalOS = Platform.OS;
+      Platform.OS = 'web';
+      try { await fn(); } finally { Platform.OS = originalOS; }
+    };
+  }
 
-      expect(confirm).toHaveBeenCalledOnce();
-      expect(onUpdate).toHaveBeenCalledWith(editing.id, {
-        title: 'Weekly Quiz',
-        course: 'CS101',
-        dueDate: '2026-06-15',
-        dueTime: null,
-        importance: 3,
-        complexity: 'medium',
-        status: 'in_progress',
-      });
-      expect(onUpdateSeries).not.toHaveBeenCalled();
-    } finally {
-      Platform.OS = originalOS;
-      if (prevWindow === undefined) delete globalThis.window;
-      else globalThis.window = prevWindow;
-    }
-  });
+  it('web: submit shows the in-modal scope prompt instead of Alert/confirm', onWeb(async () => {
+    const { result, submitPromise } = await webScopePromptSetup();
+    await act(async () => { result.current.resolveScopePrompt('cancel'); await submitPromise; });
+  }));
+
+  it("web: 'future' resolves to onUpdateSeries with {...base, status}", onWeb(async () => {
+    const { result, submitPromise, onUpdate, onUpdateSeries, editing } = await webScopePromptSetup();
+
+    await act(async () => { result.current.resolveScopePrompt('future'); await submitPromise; });
+
+    expect(onUpdateSeries).toHaveBeenCalledWith(editing.id, EXPECTED_PAYLOAD);
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(result.current.scopePromptVisible).toBe(false);
+  }));
+
+  it("web: 'one' resolves to onUpdate with {...base, status}", onWeb(async () => {
+    const { result, submitPromise, onUpdate, onUpdateSeries, editing } = await webScopePromptSetup();
+
+    await act(async () => { result.current.resolveScopePrompt('one'); await submitPromise; });
+
+    expect(onUpdate).toHaveBeenCalledWith(editing.id, EXPECTED_PAYLOAD);
+    expect(onUpdateSeries).not.toHaveBeenCalled();
+    expect(result.current.scopePromptVisible).toBe(false);
+  }));
+
+  it("web: 'cancel' resolves the submit without saving — edits stay, nothing is written", onWeb(async () => {
+    const { result, submitPromise, onUpdate, onUpdateSeries } = await webScopePromptSetup();
+
+    await act(async () => { result.current.resolveScopePrompt('cancel'); await submitPromise; });
+
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(onUpdateSeries).not.toHaveBeenCalled();
+    expect(result.current.scopePromptVisible).toBe(false);
+  }));
+
+  it('web: a dangling prompt is resolved as cancel when the modal re-seeds (visible flip)', onWeb(async () => {
+    const { onUpdate, onUpdateSeries, editing } = seriesEditingSetup();
+    const cbs = defaultCallbacks({ onUpdate, onUpdateSeries });
+    // The project renderHook's rerender takes no props — drive `visible`
+    // through a captured variable instead.
+    let visible = true;
+    const { result, rerender } = renderHook(() =>
+      useAssignmentForm({ visible, editing, ...cbs })
+    );
+    await flushMicrotasks();
+
+    let submitPromise;
+    act(() => { submitPromise = result.current.handleSubmit(); });
+    await flushMicrotasks();
+    expect(result.current.scopePromptVisible).toBe(true);
+
+    // Close the modal underneath the pending prompt — the reset effect
+    // resolves it as a cancel on the close itself. rerender() wraps act,
+    // so keep the promise await OUTSIDE to avoid nesting act calls.
+    visible = false;
+    rerender();
+    await act(async () => { await submitPromise; });
+    visible = true;
+    rerender();
+
+    expect(result.current.scopePromptVisible).toBe(false);
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(onUpdateSeries).not.toHaveBeenCalled();
+  }));
 });
 
 describe('useAssignmentForm — toggleRecurring', () => {
