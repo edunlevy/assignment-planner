@@ -187,7 +187,7 @@ export default function AssignmentFormModal({
             <Pressable
               style={[styles.saveButton, saving && { opacity: 0.6 }]}
               onPress={f.handleSubmit}
-              disabled={saving}
+              disabled={saving || f.scopePromptVisible}
             >
               {saving
                 ? <ActivityIndicator color={WHITE} />
@@ -201,7 +201,7 @@ export default function AssignmentFormModal({
               <Pressable
                 style={[styles.deleteButton, saving && { opacity: 0.4 }]}
                 onPress={f.handleDelete}
-                disabled={saving}
+                disabled={saving || f.scopePromptVisible}
               >
                 <Text style={styles.deleteButtonText}>Delete Assignment</Text>
               </Pressable>
@@ -211,16 +211,43 @@ export default function AssignmentFormModal({
               <Pressable
                 style={[styles.deleteButton, saving && { opacity: 0.4 }]}
                 onPress={f.handleDeleteSeries}
-                disabled={saving}
+                disabled={saving || f.scopePromptVisible}
               >
                 <Text style={styles.deleteButtonText}>Delete Entire Series</Text>
               </Pressable>
             )}
 
-            <Pressable style={styles.cancelButton} onPress={onClose} disabled={saving}>
+            {/* All four controls disable while the web scope overlay is up:
+                the overlay covers them visually but react-native-web keeps
+                non-disabled Pressables keyboard-reachable (Tab + Enter). */}
+            <Pressable style={styles.cancelButton} onPress={onClose} disabled={saving || f.scopePromptVisible}>
               <Text style={styles.cancelButtonText}>Cancel</Text>
             </Pressable>
           </ScrollView>
+
+          {/* Web-only series-edit-scope chooser (native uses Alert.alert —
+              see useAssignmentForm.chooseSeriesEditScope). Rendered as an
+              in-modal overlay so all three choices exist on web, where the
+              old window.confirm fallback had no way to back out. */}
+          {f.scopePromptVisible && (
+            <View style={styles.scopeOverlay}>
+              <View style={styles.scopeSheet}>
+                <Text style={styles.scopeTitle}>Apply changes to…</Text>
+                <Text style={styles.scopeBody}>
+                  This assignment repeats. Apply your changes to just this occurrence, or to this and all future occurrences?
+                </Text>
+                <Pressable style={styles.scopeButton} onPress={() => f.resolveScopePrompt('one')}>
+                  <Text style={styles.scopeButtonText}>Just this one</Text>
+                </Pressable>
+                <Pressable style={styles.scopeButton} onPress={() => f.resolveScopePrompt('future')}>
+                  <Text style={styles.scopeButtonText}>This & future occurrences</Text>
+                </Pressable>
+                <Pressable style={styles.scopeCancelButton} onPress={() => f.resolveScopePrompt('cancel')}>
+                  <Text style={styles.scopeCancelText}>Cancel</Text>
+                </Pressable>
+              </View>
+            </View>
+          )}
         </View>
     </Modal>
   );

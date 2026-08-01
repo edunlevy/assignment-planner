@@ -1,5 +1,5 @@
 import React from 'react';
-import { Alert } from 'react-native';
+import { Alert, Platform } from 'react-native';
 import { act } from 'react-test-renderer';
 import { render } from '../helpers/renderWithProviders';
 import { makeAssignment, resetAssignmentCounter } from '../helpers/mockAssignment';
@@ -487,4 +487,104 @@ describe('AssignmentFormModal — saving state', () => {
     }
     expect(hasActivityIndicator(tree)).toBe(true);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Web series-edit-scope overlay (native uses Alert.alert; the overlay is the
+// web replacement for the old window.confirm fallback whose Cancel saved).
+// ---------------------------------------------------------------------------
+describe('AssignmentFormModal — web scope chooser overlay', () => {
+  function withWebPlatform(fn) {
+    return async () => {
+      const originalOS = Platform.OS;
+      Platform.OS = 'web';
+      try { await fn(); } finally { Platform.OS = originalOS; }
+    };
+  }
+
+  function seriesProps(overrides = {}) {
+    return makeProps({
+      editing: makeAssignment({ seriesId: 'series-1', title: 'Weekly Quiz' }),
+      ...overrides,
+    });
+  }
+
+  it('is not rendered before Save is pressed', withWebPlatform(async () => {
+    const screen = render(React.createElement(AssignmentFormModal, seriesProps()));
+    expect(screen.queryByText('Just this one')).toBeNull();
+  }));
+
+  it('appears after Save on a series row, and "This & future occurrences" resolves to onUpdateSeries', withWebPlatform(async () => {
+    const onUpdateSeries = vi.fn(async () => {});
+    const onUpdate = vi.fn(async () => {});
+    const screen = render(React.createElement(AssignmentFormModal, seriesProps({ onUpdateSeries, onUpdate })));
+
+    screen.firePressOnText('Save Changes');
+    await screen.flush();
+
+    expect(Alert.alert).not.toHaveBeenCalled();
+    expect(screen.getByText('Just this one')).toBeTruthy();
+    expect(screen.getByText('This & future occurrences')).toBeTruthy();
+
+    screen.firePressOnText('This & future occurrences');
+    await screen.flush();
+
+    expect(onUpdateSeries).toHaveBeenCalledOnce();
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(screen.queryByText('Just this one')).toBeNull();
+  }));
+
+  it('disables the form controls behind the overlay while it is open (keyboard reachability)', withWebPlatform(async () => {
+    const screen = render(React.createElement(AssignmentFormModal, seriesProps()));
+
+    screen.firePressOnText('Save Changes');
+    await screen.flush();
+
+    const disabledLabels = ['Save Changes', 'Delete Assignment', 'Delete Entire Series'];
+    for (const label of disabledLabels) {
+      const pressable = screen
+        .getAllByType('Pressable')
+        .find(p => collectText(p).includes(label));
+      expect(pressable.props.disabled).toBe(true);
+    }
+  }));
+
+  it('"Just this one" resolves to onUpdate', withWebPlatform(async () => {
+    const onUpdateSeries = vi.fn(async () => {});
+    const onUpdate = vi.fn(async () => {});
+    const screen = render(React.createElement(AssignmentFormModal, seriesProps({ onUpdateSeries, onUpdate })));
+
+    screen.firePressOnText('Save Changes');
+    await screen.flush();
+    screen.firePressOnText('Just this one');
+    await screen.flush();
+
+    expect(onUpdate).toHaveBeenCalledOnce();
+    expect(onUpdateSeries).not.toHaveBeenCalled();
+  }));
+
+  it("the overlay's Cancel saves nothing and leaves the modal open with the form intact", withWebPlatform(async () => {
+    const onUpdateSeries = vi.fn(async () => {});
+    const onUpdate = vi.fn(async () => {});
+    const onClose = vi.fn();
+    const screen = render(React.createElement(AssignmentFormModal, seriesProps({ onUpdateSeries, onUpdate, onClose })));
+
+    screen.firePressOnText('Save Changes');
+    await screen.flush();
+    // The overlay renders its own Cancel plus the form's Cancel button —
+    // both share the label, so disambiguate via Pressable text: the overlay
+    // Cancel is the LAST Cancel-labelled Pressable in tree order.
+    const cancelPressables = screen
+      .getAllByType('Pressable')
+      .filter(p => collectText(p) === 'Cancel');
+    act(() => { cancelPressables[cancelPressables.length - 1].props.onPress(); });
+    await screen.flush();
+
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(onUpdateSeries).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.queryByText('Just this one')).toBeNull();
+    // The form is still there, edits intact.
+    expect(screen.getByText('Save Changes')).toBeTruthy();
+  }));
 });

@@ -23,7 +23,7 @@
         "backgroundColor": "#3B5BDB"
       },
       "package": "com.elliedunlevy.assignmentplanner",
-      "permissions": ["READ_CALENDAR", "WRITE_CALENDAR"]
+      "permissions": ["READ_CALENDAR", "WRITE_CALENDAR", "SCHEDULE_EXACT_ALARM", "USE_EXACT_ALARM"]
     },
     "web": {
       "favicon": "./assets/favicon.png"

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Alert, Platform } from 'react-native';
 import { validateAssignmentForm, ruleFromForm, hasErrors, EMPTY_ERRORS } from '../lib/formValidation';
 
@@ -58,15 +58,32 @@ export function useAssignmentForm({
 }) {
   const [form, setForm] = useState(EMPTY_FORM);
   const [fieldErrors, setFieldErrors] = useState(EMPTY_ERRORS);
+  // Web-only in-modal replacement for the native series-edit-scope Alert
+  // (see chooseSeriesEditScope). Visibility drives the overlay in
+  // AssignmentFormModal; the pending promise's resolver and payload live in
+  // the ref so a re-render can't lose them.
+  const [scopePromptVisible, setScopePromptVisible] = useState(false);
+  const scopePromptRef = useRef(null); // { resolve, withStatus } while visible
 
   // Reset form state when the modal opens or switches between create/edit.
   // Effect-based so we don't issue setState during render (which Strict Mode
   // and React 19 are stricter about). The `visible` gate ensures we only
   // re-seed on open transitions, never while the user is mid-edit.
   useEffect(() => {
-    if (!visible) return;
-    setForm(formFor(editing));
-    setFieldErrors(EMPTY_ERRORS);
+    if (visible) {
+      setForm(formFor(editing));
+      setFieldErrors(EMPTY_ERRORS);
+    }
+    // Cleanup runs before every deps change AND on unmount: a scope prompt
+    // can't meaningfully survive the modal closing, re-seeding, or tearing
+    // down (sign-out unmounts the authed tree), and its promise must settle
+    // in all three cases or handleSubmit dangles forever. Resolving with
+    // nothing = cancel, no write.
+    return () => {
+      scopePromptRef.current?.resolve();
+      scopePromptRef.current = null;
+      setScopePromptVisible(false);
+    };
   }, [visible, editing?.id]);
 
   const isEditing = !!editing;
@@ -135,20 +152,26 @@ export function useAssignmentForm({
   // picker when they saved; discarding it would silently revert a visible
   // edit) while the rest of the tail keeps each occurrence's own completion
   // state — that split lives in the update_series_from RPC. On web,
-  // Alert.alert renders no actionable buttons, so window.confirm chooses
-  // between the two scopes (OK = this and future, Cancel = just this one) —
-  // the binary-confirm limitation matches handleDeleteSeries below; backing
-  // out entirely on web means closing the modal without saving.
+  // Alert.alert renders no actionable buttons, so the choice renders as an
+  // in-modal overlay (AssignmentFormModal) with the same three options the
+  // native Alert offers — the earlier window.confirm fallback collapsed
+  // Cancel into "just this one", the opposite of what Cancel means in every
+  // other confirm in this file.
   function chooseSeriesEditScope(base) {
     const withStatus = { ...base, status: form.status };
     if (Platform.OS === 'web') {
-      // eslint-disable-next-line no-alert
-      const applyToFuture = window.confirm(
-        'Apply this change to this and all future occurrences? Cancel applies it to just this one.'
-      );
-      return applyToFuture
-        ? onUpdateSeries(editing.id, withStatus)
-        : onUpdate(editing.id, withStatus);
+      // Re-entrancy guard: while the overlay is up the Save button behind it
+      // is still keyboard-reachable on react-native-web (Pressable keeps
+      // tabIndex=0 and fires on Enter), and a second submit overwriting the
+      // ref would orphan the first prompt's resolver forever. The edited
+      // row's id is snapshotted alongside the payload so a realtime change
+      // to `editing` under the open prompt can't diverge from what was
+      // validated.
+      if (scopePromptRef.current) return Promise.resolve();
+      return new Promise(resolve => {
+        scopePromptRef.current = { resolve, withStatus, id: editing.id };
+        setScopePromptVisible(true);
+      });
     }
     return new Promise(resolve => {
       Alert.alert(
@@ -170,6 +193,23 @@ export function useAssignmentForm({
         { onDismiss: () => resolve() },
       );
     });
+  }
+
+  // Settle the web scope prompt. choice: 'one' | 'future' | 'cancel'.
+  // Cancel resolves without saving — the modal stays open with edits intact,
+  // matching the native Alert's Cancel and this file's other confirms.
+  function resolveScopePrompt(choice) {
+    const pending = scopePromptRef.current;
+    scopePromptRef.current = null;
+    setScopePromptVisible(false);
+    if (!pending) return;
+    if (choice === 'one') {
+      pending.resolve(onUpdate(pending.id, pending.withStatus));
+    } else if (choice === 'future') {
+      pending.resolve(onUpdateSeries(pending.id, pending.withStatus));
+    } else {
+      pending.resolve();
+    }
   }
 
   function handleDelete() {
@@ -218,6 +258,8 @@ export function useAssignmentForm({
     handleSubmit,
     handleDelete,
     handleDeleteSeries,
+    scopePromptVisible,
+    resolveScopePrompt,
     importanceHint: IMPORTANCE_HINTS[form.importance],
   };
 }
