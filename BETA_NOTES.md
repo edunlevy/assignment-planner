@@ -67,6 +67,62 @@ General:
 
 ---
 
+## Tester checklist — 2026-08 TestFlight build (calendar sync, filters, recurrence)
+
+Copy-paste for testers on the build that adds calendar sync, filtering, and
+the recurrence overhaul. The calendar section matters most — it exercises
+the permission edge that caused the original sync bug and is the one part
+that could not be fully verified off-device.
+
+```
+Hi! This build adds calendar sync, filters, and much better repeating
+assignments. Please try each of these and reply with anything broken,
+confusing, or unexpected.
+
+Calendar sync (please test this first):
+[ ] Account -> turn on "Sync to Calendar" -> choose FULL ACCESS when iOS asks
+[ ] Open the Apple Calendar app — there should be a new "Assignment Planner"
+    calendar with an event for every assignment
+[ ] Add a new assignment — it should appear in Calendar
+[ ] Change an assignment's due date — the event should move
+[ ] Extra credit: turn sync off, then on again, but this time pick
+    "Add Events Only" at the permission prompt — the app should explain it
+    needs Full Access and offer an "Open Settings" button that works
+
+Filtering:
+[ ] Use the new chip bar: filter by class, by Overdue / Today / This week,
+    and by Short / Medium / Long — try combining them
+[ ] Tap Clear to reset
+[ ] While filtering, the "Work on next" card and the "N remaining" count
+    should NOT change — that is intentional
+
+Repeating assignments — creating:
+[ ] Create a repeating assignment on specific weekdays (e.g. Mon + Wed + Fri)
+[ ] Create a monthly one, and one that repeats "After N times" instead of
+    ending on a date
+[ ] Check the generated occurrences land on the days you expect
+[ ] Oddball: a monthly assignment due on the 31st — months without a 31st
+    should be SKIPPED, not moved to the 30th
+
+Repeating assignments — editing:
+[ ] Edit one occurrence, choose "Just this one" — only that one changes
+[ ] Edit another, choose "This & future" — that one and everything after it
+    changes; moving the due date 2 days should shift every later occurrence
+    by 2 days; earlier occurrences must be untouched
+[ ] Mark an occurrence completed, then do a "This & future" edit from an
+    EARLIER occurrence — the completed one should stay completed
+
+Reminders (regression check):
+[ ] Add an assignment due about an hour from now with a due time — the
+    reminder notification should arrive
+
+Report: crashes, any "Could not..." error message (screenshot it — exact
+wording matters), and any occurrence or calendar event on a day you did not
+expect.
+```
+
+---
+
 ## Active testers
 
 | Name | Platform | UDID added | Build sent | Notes |
@@ -91,6 +147,7 @@ Add a new dated entry as feedback comes in. Tag each with `bug`, `confusion`, or
 - **Reminder IDs are device-local only.** If a tester reinstalls the app or signs in on a second device, the app cannot cancel old reminders by ID (they're cleared on sign-out and rescheduled on next login, which mitigates this for the normal flow). Optional Supabase migration in `NOTES.md`.
 - **Expo Go cannot reliably test notifications.** That's why internal distribution exists — notifications only work properly in real builds.
 - **iOS first launch requires trusting the developer certificate.** Settings → General → VPN & Device Management.
+- **Play Store release prerequisite:** the app declares `SCHEDULE_EXACT_ALARM` and `USE_EXACT_ALARM` (exact reminder delivery on Android 12+). Any future Google Play submission must complete the Play Console "Exact alarm" declaration form, or the release can be blocked.
 
 ---
 
