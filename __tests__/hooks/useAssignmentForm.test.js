@@ -569,6 +569,58 @@ describe('useAssignmentForm — chooseSeriesEditScope (web, editing a series row
     expect(result.current.scopePromptVisible).toBe(false);
   }));
 
+  it('web: a second submit while the prompt is open is a no-op — it must not orphan the first resolver', onWeb(async () => {
+    // The overlay covers the Save button visually, but react-native-web
+    // keeps non-disabled Pressables keyboard-reachable — Enter could
+    // re-fire handleSubmit. Without the re-entrancy guard the second call
+    // overwrote scopePromptRef and the first submit promise never settled.
+    const { result, submitPromise, onUpdate, onUpdateSeries, editing } = await webScopePromptSetup();
+
+    let secondSubmit;
+    act(() => { secondSubmit = result.current.handleSubmit(); });
+    await act(async () => { await secondSubmit; }); // resolves immediately, no second prompt
+
+    expect(result.current.scopePromptVisible).toBe(true); // first prompt intact
+
+    await act(async () => { result.current.resolveScopePrompt('one'); await submitPromise; });
+    expect(onUpdate).toHaveBeenCalledOnce();
+    expect(onUpdate).toHaveBeenCalledWith(editing.id, EXPECTED_PAYLOAD);
+    expect(onUpdateSeries).not.toHaveBeenCalled();
+  }));
+
+  it('web: resolveScopePrompt with no pending prompt is a safe no-op', onWeb(async () => {
+    const { onUpdate, onUpdateSeries, editing } = seriesEditingSetup();
+    const { result } = renderHook(() =>
+      useAssignmentForm({ visible: true, editing, ...defaultCallbacks({ onUpdate, onUpdateSeries }) })
+    );
+    await flushMicrotasks();
+
+    act(() => { result.current.resolveScopePrompt('one'); });
+
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(onUpdateSeries).not.toHaveBeenCalled();
+  }));
+
+  it('web: unmount with a pending prompt settles the submit promise as a cancel', onWeb(async () => {
+    const { onUpdate, onUpdateSeries, editing } = seriesEditingSetup();
+    const cbs = defaultCallbacks({ onUpdate, onUpdateSeries });
+    const { result, unmount } = renderHook(() =>
+      useAssignmentForm({ visible: true, editing, ...cbs })
+    );
+    await flushMicrotasks();
+
+    let submitPromise;
+    act(() => { submitPromise = result.current.handleSubmit(); });
+    await flushMicrotasks();
+    expect(result.current.scopePromptVisible).toBe(true);
+
+    unmount();
+    await act(async () => { await submitPromise; });
+
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(onUpdateSeries).not.toHaveBeenCalled();
+  }));
+
   it('web: a dangling prompt is resolved as cancel when the modal re-seeds (visible flip)', onWeb(async () => {
     const { onUpdate, onUpdateSeries, editing } = seriesEditingSetup();
     const cbs = defaultCallbacks({ onUpdate, onUpdateSeries });

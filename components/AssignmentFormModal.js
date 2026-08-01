@@ -187,7 +187,7 @@ export default function AssignmentFormModal({
             <Pressable
               style={[styles.saveButton, saving && { opacity: 0.6 }]}
               onPress={f.handleSubmit}
-              disabled={saving}
+              disabled={saving || f.scopePromptVisible}
             >
               {saving
                 ? <ActivityIndicator color={WHITE} />
@@ -201,7 +201,7 @@ export default function AssignmentFormModal({
               <Pressable
                 style={[styles.deleteButton, saving && { opacity: 0.4 }]}
                 onPress={f.handleDelete}
-                disabled={saving}
+                disabled={saving || f.scopePromptVisible}
               >
                 <Text style={styles.deleteButtonText}>Delete Assignment</Text>
               </Pressable>
@@ -211,13 +211,16 @@ export default function AssignmentFormModal({
               <Pressable
                 style={[styles.deleteButton, saving && { opacity: 0.4 }]}
                 onPress={f.handleDeleteSeries}
-                disabled={saving}
+                disabled={saving || f.scopePromptVisible}
               >
                 <Text style={styles.deleteButtonText}>Delete Entire Series</Text>
               </Pressable>
             )}
 
-            <Pressable style={styles.cancelButton} onPress={onClose} disabled={saving}>
+            {/* All four controls disable while the web scope overlay is up:
+                the overlay covers them visually but react-native-web keeps
+                non-disabled Pressables keyboard-reachable (Tab + Enter). */}
+            <Pressable style={styles.cancelButton} onPress={onClose} disabled={saving || f.scopePromptVisible}>
               <Text style={styles.cancelButtonText}>Cancel</Text>
             </Pressable>
           </ScrollView>

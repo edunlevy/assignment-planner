@@ -534,6 +534,21 @@ describe('AssignmentFormModal — web scope chooser overlay', () => {
     expect(screen.queryByText('Just this one')).toBeNull();
   }));
 
+  it('disables the form controls behind the overlay while it is open (keyboard reachability)', withWebPlatform(async () => {
+    const screen = render(React.createElement(AssignmentFormModal, seriesProps()));
+
+    screen.firePressOnText('Save Changes');
+    await screen.flush();
+
+    const disabledLabels = ['Save Changes', 'Delete Assignment', 'Delete Entire Series'];
+    for (const label of disabledLabels) {
+      const pressable = screen
+        .getAllByType('Pressable')
+        .find(p => collectText(p).includes(label));
+      expect(pressable.props.disabled).toBe(true);
+    }
+  }));
+
   it('"Just this one" resolves to onUpdate', withWebPlatform(async () => {
     const onUpdateSeries = vi.fn(async () => {});
     const onUpdate = vi.fn(async () => {});

@@ -70,16 +70,20 @@ export function useAssignmentForm({
   // and React 19 are stricter about). The `visible` gate ensures we only
   // re-seed on open transitions, never while the user is mid-edit.
   useEffect(() => {
-    // Runs on BOTH open and close (before the visible gate below): a scope
-    // prompt can't meaningfully survive the modal closing or re-seeding
-    // under it, and its promise must settle either way or handleSubmit
-    // dangles forever. Resolving with nothing = cancel, no write.
-    scopePromptRef.current?.resolve();
-    scopePromptRef.current = null;
-    setScopePromptVisible(false);
-    if (!visible) return;
-    setForm(formFor(editing));
-    setFieldErrors(EMPTY_ERRORS);
+    if (visible) {
+      setForm(formFor(editing));
+      setFieldErrors(EMPTY_ERRORS);
+    }
+    // Cleanup runs before every deps change AND on unmount: a scope prompt
+    // can't meaningfully survive the modal closing, re-seeding, or tearing
+    // down (sign-out unmounts the authed tree), and its promise must settle
+    // in all three cases or handleSubmit dangles forever. Resolving with
+    // nothing = cancel, no write.
+    return () => {
+      scopePromptRef.current?.resolve();
+      scopePromptRef.current = null;
+      setScopePromptVisible(false);
+    };
   }, [visible, editing?.id]);
 
   const isEditing = !!editing;
@@ -156,8 +160,16 @@ export function useAssignmentForm({
   function chooseSeriesEditScope(base) {
     const withStatus = { ...base, status: form.status };
     if (Platform.OS === 'web') {
+      // Re-entrancy guard: while the overlay is up the Save button behind it
+      // is still keyboard-reachable on react-native-web (Pressable keeps
+      // tabIndex=0 and fires on Enter), and a second submit overwriting the
+      // ref would orphan the first prompt's resolver forever. The edited
+      // row's id is snapshotted alongside the payload so a realtime change
+      // to `editing` under the open prompt can't diverge from what was
+      // validated.
+      if (scopePromptRef.current) return Promise.resolve();
       return new Promise(resolve => {
-        scopePromptRef.current = { resolve, withStatus };
+        scopePromptRef.current = { resolve, withStatus, id: editing.id };
         setScopePromptVisible(true);
       });
     }
@@ -192,9 +204,9 @@ export function useAssignmentForm({
     setScopePromptVisible(false);
     if (!pending) return;
     if (choice === 'one') {
-      pending.resolve(onUpdate(editing.id, pending.withStatus));
+      pending.resolve(onUpdate(pending.id, pending.withStatus));
     } else if (choice === 'future') {
-      pending.resolve(onUpdateSeries(editing.id, pending.withStatus));
+      pending.resolve(onUpdateSeries(pending.id, pending.withStatus));
     } else {
       pending.resolve();
     }
